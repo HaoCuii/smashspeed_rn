@@ -2,560 +2,692 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
-  Animated,
-  Dimensions,
-  TouchableOpacity,
   Image,
-  StyleSheet,
-  SafeAreaView,
   FlatList,
+  Dimensions,
+  StyleSheet,
+  TouchableOpacity,
+  Animated,
+  ScrollView,
+  StatusBar,
+  Platform,
 } from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
-import GlassPanel from '../components/GlassPanel';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import Entypo from 'react-native-vector-icons/Entypo';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width, height } = Dimensions.get('window');
 
-// Arrow Button Component
-const ArrowButton = ({ icon, onPress }) => (
-  <TouchableOpacity onPress={onPress} style={styles.arrowButton}>
-    <View style={styles.arrowButtonContainer}>
-      <Text style={styles.arrowIcon}>{icon}</Text>
-    </View>
-  </TouchableOpacity>
-);
+// LOCALIZATION STRINGS
+const strings = {
+  onboarding_getStartedButton: "Get Started",
+  onboarding_slide1_title: "1. Record Your Smash",
+  onboarding_slide1_instruction1: "Set the camera on the sideline, facing straight across. Court lines should look parallel to the frame.",
+  onboarding_slide1_instruction2: "Keep the shuttle visible — avoid glare or busy backgrounds.",
+  onboarding_slide1_instruction3: "Use regular video. Avoid Slo-Mo or filters.",
+  onboarding_slide1_instruction4: "Trim to just the smash — under 1 second (~10 frames).",
+  onboarding_slide2_title: "2. Mark a Known Distance",
+  onboarding_slide2_instruction1: "Mark the front service line and doubles service line — 3.87 m apart.",
+  onboarding_slide2_instruction2: "Place the line directly under the player.",
+  onboarding_slide2_instruction3: "Keep 3.87 m unless using different lines — changing it may reduce accuracy.",
+  onboarding_slide3_title: "3. Review Detection",
+  onboarding_slide3_instruction1: "Use the slider or arrow keys to move through each frame and view the shuttle speed.",
+  onboarding_slide3_instruction2: "Use the 'Interpolate' tool to automatically fill in gaps between good detections. This is highly recommended.",
+  onboarding_slide3_instruction3: "For fine-tuning, use the manual controls to move, resize, add, or remove a detection box.",
+  onboarding_slide3_instruction4: "If you make a mistake, use the undo/redo buttons in the top left.",
+  onboarding_swipePrompt: "Swipe to get started",
+  onboarding_welcome_title: "Welcome to",
+  onboarding_welcome_brand: "Smashspeed",
+  onboarding_welcome_prompt: "Wanna know how fast you really smash?"
+};
 
-// Welcome View Component
-const OnboardingWelcomeView = ({ slideIndex, currentTab }) => {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(-30)).current;
-  const iconFade = useRef(new Animated.Value(0)).current;
-  const titleFade = useRef(new Animated.Value(0)).current;
-  const promptFade = useRef(new Animated.Value(0)).current;
-  const swipeFade = useRef(new Animated.Value(0)).current;
-  const [showContent, setShowContent] = useState(false);
+// SLIDES DATA
+const slides = [
+  {
+    type: 'welcome',
+    images: [require('../../assets/AppIconTransparent.png')]
+  },
+  {
+    type: 'instruction',
+    title: strings.onboarding_slide1_title,
+    images: [
+      require('../../assets/OnboardingSlide1.2.png'),
+      require('../../assets/OnboardingSlide1.1.png')
+    ],
+    instructions: [
+      { icon: 'arrow-left-and-right-square-fill', iconSet: 'sf', text: strings.onboarding_slide1_instruction1 },
+      { icon: 'bird-fill', iconSet: 'sf', text: strings.onboarding_slide1_instruction2 },
+      { icon: 'video-slash-fill', iconSet: 'sf', text: strings.onboarding_slide1_instruction3 },
+      { icon: 'scissors', iconSet: 'sf', text: strings.onboarding_slide1_instruction4 }
+    ]
+  },
+  {
+    type: 'instruction',
+    title: strings.onboarding_slide2_title,
+    images: [
+      require('../../assets/OnboardingSlide2.1.png'),
+      require('../../assets/OnboardingSlide2.2.png'),
+      require('../../assets/OnboardingSlide2.3.png')
+    ],
+    instructions: [
+      { icon: 'crosshairs-gps', iconSet: 'MaterialCommunityIcons', text: strings.onboarding_slide2_instruction1 },
+      { icon: 'person', iconSet: 'Ionicons', text: strings.onboarding_slide2_instruction2 },
+      { icon: 'ruler', iconSet: 'MaterialCommunityIcons', text: strings.onboarding_slide2_instruction3 }
+    ]
+  },
+  {
+    type: 'instruction',
+    title: strings.onboarding_slide3_title,
+    images: [
+      require('../../assets/OnboardingSlide3.1.png'),
+      require('../../assets/OnboardingSlide3.2.png')
+    ],
+    instructions: [
+      { icon: 'swap-horizontal', iconSet: 'Ionicons', text: strings.onboarding_slide3_instruction1 },
+      { icon: 'vector-rectangle', iconSet: 'MaterialCommunityIcons', text: strings.onboarding_slide3_instruction2 },
+      { icon: 'options', iconSet: 'Ionicons', text: strings.onboarding_slide3_instruction3 },
+      { icon: 'checkmark-circle', iconSet: 'Ionicons', text: strings.onboarding_slide3_instruction4 }
+    ],
+    isLast: true
+  }
+];
 
-  const triggerAnimation = () => {
-    if (showContent) return;
-    setShowContent(true);
-    
-    // Immediate animation - no delay
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.spring(translateY, {
-        toValue: 0,
-        tension: 100,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    // Faster content animations
-    Animated.timing(iconFade, {
-      toValue: 1,
-      duration: 200,
-      delay: 100,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(titleFade, {
-      toValue: 1,
-      duration: 200,
-      delay: 150,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(promptFade, {
-      toValue: 1,
-      duration: 200,
-      delay: 200,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(swipeFade, {
-      toValue: 1,
-      duration: 200,
-      delay: 250,
-      useNativeDriver: true,
-    }).start();
-  };
+// Background gradient component
+const BackgroundGradient = () => {
+  const animatedValue1 = useRef(new Animated.Value(0)).current;
+  const animatedValue2 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (currentTab === slideIndex) {
-      triggerAnimation();
-    }
-  }, [currentTab, slideIndex]);
+    const animation1 = Animated.loop(
+      Animated.sequence([
+        Animated.timing(animatedValue1, {
+          toValue: 1,
+          duration: 4000,
+          useNativeDriver: false,
+        }),
+        Animated.timing(animatedValue1, {
+          toValue: 0,
+          duration: 4000,
+          useNativeDriver: false,
+        }),
+      ])
+    );
+
+    const animation2 = Animated.loop(
+      Animated.sequence([
+        Animated.timing(animatedValue2, {
+          toValue: 1,
+          duration: 6000,
+          useNativeDriver: false,
+        }),
+        Animated.timing(animatedValue2, {
+          toValue: 0,
+          duration: 6000,
+          useNativeDriver: false,
+        }),
+      ])
+    );
+
+    animation1.start();
+    animation2.start();
+
+    return () => {
+      animation1.stop();
+      animation2.stop();
+    };
+  }, []);
+
+  const circle1Transform = animatedValue1.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-150, -100],
+  });
+
+  const circle2Transform = animatedValue2.interpolate({
+    inputRange: [0, 1],
+    outputRange: [150, 100],
+  });
 
   return (
-    <View style={styles.welcomeContainer}>
-      {/* Background Blurs - Keep original blue decoration for welcome */}
-      <View style={[styles.backgroundBlur, styles.blur1]} />
-      <View style={[styles.backgroundBlur, styles.blur2]} />
-      
+    <>
+      <Animated.View
+        style={[
+          styles.backgroundCircle1,
+          {
+            transform: [{ translateX: circle1Transform }, { translateY: -200 }],
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.backgroundCircle2,
+          {
+            transform: [{ translateX: circle2Transform }, { translateY: 150 }],
+          },
+        ]}
+      />
+    </>
+  );
+};
+
+// Glass panel component
+const GlassPanel = ({ children, style }) => {
+  if (Platform.OS === 'ios') {
+    return (
+      <BlurView intensity={20} tint="light" style={[styles.glassPanel, style]}>
+        {children}
+      </BlurView>
+    );
+  }
+  
+  return (
+    <View style={[styles.glassPanelAndroid, style]}>
+      {children}
+    </View>
+  );
+};
+
+// Icon component to handle different icon sets
+const IconComponent = ({ icon, iconSet, size = 24, color = '#007AFF' }) => {
+  const iconProps = { name: icon, size, color };
+  
+  switch (iconSet) {
+    case 'MaterialCommunityIcons':
+      return <MaterialCommunityIcons {...iconProps} />;
+    case 'Entypo':
+      return <Entypo {...iconProps} />;
+    case 'sf':
+      // Map SF Symbols to React Native equivalents
+      const sfIconMap = {
+        'arrow-left-and-right-square-fill': 'swap-horizontal',
+        'bird-fill': 'airplane',
+        'video-slash-fill': 'videocam-off',
+        'scissors': 'cut',
+      };
+      return <Ionicons name={sfIconMap[icon] || icon} size={size} color={color} />;
+    default:
+      return <Ionicons {...iconProps} />;
+  }
+};
+
+export default function Onboarding({ onComplete }) {
+  const [currentSlide, setCurrentSlide] = useState(0);
+  const scrollX = useRef(new Animated.Value(0)).current;
+
+  const renderSlide = ({ item, index }) => {
+    return item.type === 'welcome'
+      ? <WelcomeSlide currentSlide={currentSlide} slideIndex={index} />
+      : <InstructionSlide slide={item} currentSlide={currentSlide} slideIndex={index} onComplete={onComplete} />;
+  };
+
+  return (
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <View style={styles.container}>
+        <BackgroundGradient />
+        
+        <Animated.FlatList
+          data={slides}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(_, i) => i.toString()}
+          renderItem={renderSlide}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+            { useNativeDriver: false }
+          )}
+          onMomentumScrollEnd={ev =>
+            setCurrentSlide(Math.round(ev.nativeEvent.contentOffset.x / width))
+          }
+        />
+        
+        {/* Close button on last slide */}
+        {currentSlide === slides.length - 1 && (
+          <TouchableOpacity onPress={onComplete} style={styles.closeButton}>
+            <Ionicons name="close-circle" size={32} color="rgba(128, 128, 128, 0.8)" />
+          </TouchableOpacity>
+        )}
+        
+        {/* Page indicators */}
+        <View style={styles.pageIndicator}>
+          {slides.map((_, index) => (
+            <View
+              key={index}
+              style={[
+                styles.dot,
+                currentSlide === index ? styles.activeDot : styles.inactiveDot
+              ]}
+            />
+          ))}
+        </View>
+      </View>
+    </>
+  );
+}
+
+function WelcomeSlide({ currentSlide, slideIndex }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(-30)).current;
+
+  useEffect(() => {
+    if (currentSlide === slideIndex) {
+      Animated.stagger(100, [
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(slideAnim, {
+          toValue: 0,
+          tension: 50,
+          friction: 8,
+          useNativeDriver: true,
+        })
+      ]).start();
+    }
+  }, [currentSlide, slideIndex]);
+
+  return (
+    <View style={styles.slide}>
       <View style={styles.welcomeContent}>
+        <GlassPanel style={styles.welcomeCard}>
+          <Animated.View
+            style={[
+              styles.welcomeInner,
+              {
+                opacity: fadeAnim,
+                transform: [{ translateY: slideAnim }],
+              },
+            ]}
+          >
+            <Image
+              source={require('../../assets/AppIconTransparent.png')}
+              style={styles.appIcon}
+              resizeMode="contain"
+            />
+            
+            <View style={styles.titleContainer}>
+              <Text style={styles.welcomeTitle}>
+                {strings.onboarding_welcome_title}
+              </Text>
+              <Text style={styles.brandTitle}>
+                {strings.onboarding_welcome_brand}
+              </Text>
+            </View>
+            
+            <Text style={styles.welcomePrompt}>
+              {strings.onboarding_welcome_prompt}
+            </Text>
+          </Animated.View>
+        </GlassPanel>
+      </View>
+      
+      <View style={styles.swipePromptContainer}>
+        <Ionicons name="chevron-forward" size={16} color="#666" />
+        <Text style={styles.swipeText}>{strings.onboarding_swipePrompt}</Text>
+      </View>
+    </View>
+  );
+}
+
+function InstructionSlide({ slide, currentSlide, slideIndex, onComplete }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(-30)).current;
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  useEffect(() => {
+    if (currentSlide === slideIndex) {
+      Animated.stagger(150, [
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(slideAnim, {
+          toValue: 0,
+          tension: 50,
+          friction: 8,
+          useNativeDriver: true,
+        })
+      ]).start();
+    }
+  }, [currentSlide, slideIndex]);
+
+  const renderImageCarousel = () => {
+    if (slide.images.length === 1) {
+      return (
+        <Image
+          source={slide.images[0]}
+          style={styles.instructionImage}
+          resizeMode="contain"
+        />
+      );
+    }
+
+    return (
+      <View style={styles.imageCarouselContainer}>
+        <FlatList
+          data={slide.images}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={ev =>
+            setCurrentImageIndex(Math.round(ev.nativeEvent.contentOffset.x / (width - 40)))
+          }
+          renderItem={({ item }) => (
+            <Image
+              source={item}
+              style={styles.instructionImage}
+              resizeMode="contain"
+            />
+          )}
+          keyExtractor={(_, i) => i.toString()}
+        />
+        
+        {/* Arrow buttons */}
+        {currentImageIndex > 0 && (
+          <TouchableOpacity
+            style={[styles.arrowButton, styles.leftArrow]}
+            onPress={() => setCurrentImageIndex(Math.max(0, currentImageIndex - 1))}
+          >
+            <Ionicons name="chevron-back" size={16} color="#333" />
+          </TouchableOpacity>
+        )}
+        
+        {currentImageIndex < slide.images.length - 1 && (
+          <TouchableOpacity
+            style={[styles.arrowButton, styles.rightArrow]}
+            onPress={() => setCurrentImageIndex(Math.min(slide.images.length - 1, currentImageIndex + 1))}
+          >
+            <Ionicons name="chevron-forward" size={16} color="#333" />
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
+
+  return (
+    <ScrollView style={styles.slide} showsVerticalScrollIndicator={false}>
+      <Animated.Text
+        style={[
+          styles.instructionTitle,
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
+        {slide.title}
+      </Animated.Text>
+      
+      <Animated.View
+        style={[
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
+        <GlassPanel style={styles.instructionCard}>
+          <View style={styles.instructionContent}>
+            {renderImageCarousel()}
+            
+            <View style={styles.instructionsContainer}>
+              {slide.instructions.map((instruction, idx) => (
+                <View key={idx} style={styles.instructionRow}>
+                  <View style={styles.iconContainer}>
+                    <IconComponent
+                      icon={instruction.icon}
+                      iconSet={instruction.iconSet}
+                      size={24}
+                      color="#007AFF"
+                    />
+                  </View>
+                  <Text style={styles.instructionText}>{instruction.text}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </GlassPanel>
+      </Animated.View>
+      
+      {slide.isLast && (
         <Animated.View
           style={[
-            styles.welcomeCard,
+            styles.getStartedContainer,
             {
               opacity: fadeAnim,
-              transform: [{ translateY }],
+              transform: [{ translateY: slideAnim }],
             },
           ]}
         >
-          <GlassPanel style={styles.welcomeGlass}>
-            <Animated.View style={{ opacity: iconFade }}>
-              <Image
-                source={require('../../assets/AppIconTransparent.png')}
-                style={styles.appIcon}
-              />
-            </Animated.View>
-            
-            <Animated.View style={[styles.titleContainer, { opacity: titleFade }]}>
-              <Text style={styles.welcomeSubtitle}>Welcome to</Text>
-                              <Text style={styles.welcomeTitle}>Smash</Text>
-                <Text style={styles.welcomeTitleSecond}>speed</Text>
-            </Animated.View>
-            
-            <Animated.View style={{ opacity: promptFade }}>
-              <Text style={styles.welcomePrompt}>
-                Let's get you started with a quick tour
-              </Text>
-            </Animated.View>
-          </GlassPanel>
+          <TouchableOpacity onPress={onComplete} style={styles.getStartedButton}>
+            <Text style={styles.getStartedText}>{strings.onboarding_getStartedButton}</Text>
+          </TouchableOpacity>
         </Animated.View>
-        
-        <Animated.View style={[styles.swipePrompt, { opacity: swipeFade }]}>
-          <Text style={styles.swipeText}>Swipe to continue ›</Text>
-        </Animated.View>
-      </View>
-    </View>
+      )}
+    </ScrollView>
   );
-};
-
-// Instruction View Component
-const OnboardingInstructionView = ({
-  slideIndex,
-  currentTab,
-  images,
-  isLastSlide = false,
-  onComplete,
-}) => {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const [showContent, setShowContent] = useState(false);
-
-  const triggerAnimation = () => {
-    if (showContent) return;
-    setShowContent(true);
-    
-    // Immediate show - no animation
-    fadeAnim.setValue(1);
-  };
-
-  useEffect(() => {
-    if (currentTab === slideIndex) {
-      triggerAnimation();
-    }
-  }, [currentTab, slideIndex]);
-
-  return (
-    <View style={styles.instructionContainer}>
-      {/* Background decoration - positioned to avoid image area */}
-      <View style={styles.backgroundDecoration} />
-      
-      <View style={styles.instructionContent}>
-        <Animated.View
-          style={[
-            styles.imageOnlyContainer,
-            { opacity: fadeAnim },
-          ]}
-        >
-          <GlassPanel style={styles.imageGlassPanel}>
-            <Image source={images[0]} style={styles.fullscreenImage} />
-          </GlassPanel>
-          
-          {/* Get Started Button */}
-          {isLastSlide && (
-            <View style={styles.overlayButton}>
-              <TouchableOpacity
-                style={styles.getStartedButton}
-                onPress={onComplete}
-              >
-                <LinearGradient
-                  colors={['#007AFF', '#0051D5']}
-                  style={styles.getStartedGradient}
-                >
-                  <Text style={styles.getStartedText}>Get Started</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            </View>
-          )}
-        </Animated.View>
-      </View>
-    </View>
-  );
-};
-
-// Main Onboarding Component
-const OnboardingView = ({ onComplete }) => {
-  const [currentTab, setCurrentTab] = useState(0);
-  const scrollViewRef = useRef(null);
-  const lastSlideIndex = 7;
-
-  // Preload all images using Image.getSize for better preloading
-  const preloadImages = () => {
-    const imagesToPreload = [
-      require('../../assets/AppIconTransparent.png'),
-      require('../../assets/OnboardingSlide1.1.png'),
-      require('../../assets/OnboardingSlide2.1.png'),
-      require('../../assets/OnboardingSlide2.2.png'),
-      require('../../assets/OnboardingSlide2.3.png'),
-      require('../../assets/OnboardingSlide3.1.png'),
-      require('../../assets/OnboardingSlide3.2.png'),
-      require('../../assets/OnboardingSlide1.2.png'),
-    ];
-
-    // Force loading by creating hidden Image components
-    imagesToPreload.forEach((imageSource) => {
-      Image.resolveAssetSource(imageSource);
-    });
-  };
-
-  useEffect(() => {
-    preloadImages();
-  }, []);
-
-  const slides = [
-    {
-      type: 'welcome',
-      component: OnboardingWelcomeView,
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide1.1.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide2.1.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide2.2.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide2.3.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide3.1.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide3.2.png'),
-      ],
-    },
-    {
-      type: 'instruction',
-      images: [
-        require('../../assets/OnboardingSlide1.2.png'),
-      ],
-      isLastSlide: true,
-    },
-  ];
-
-  const handleScroll = (event) => {
-    const offsetX = event.nativeEvent.contentOffset.x;
-    const index = Math.round(offsetX / width);
-    setCurrentTab(index);
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        ref={scrollViewRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={handleScroll}
-        style={styles.mainScrollView}
-      >
-        {slides.map((slide, index) => (
-          <View key={index} style={styles.slideContainer}>
-            {slide.type === 'welcome' ? (
-              <OnboardingWelcomeView
-                slideIndex={index}
-                currentTab={currentTab}
-              />
-            ) : (
-              <OnboardingInstructionView
-                slideIndex={index}
-                currentTab={currentTab}
-                images={slide.images}
-                isLastSlide={slide.isLastSlide}
-                onComplete={onComplete}
-              />
-            )}
-          </View>
-        ))}
-      </ScrollView>
-      
-      {/* Hidden preload images */}
-      <View style={styles.hiddenPreloadContainer}>
-        <Image source={require('../../assets/AppIconTransparent.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide1.1.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide2.1.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide2.2.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide2.3.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide3.1.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide3.2.png')} style={styles.hiddenImage} />
-        <Image source={require('../../assets/OnboardingSlide1.2.png')} style={styles.hiddenImage} />
-      </View>
-      
-      {/* Close Button - Show on all slides */}
-      <TouchableOpacity style={styles.closeButton} onPress={onComplete}>
-        <View style={styles.closeButtonContainer}>
-          <Text style={styles.closeIcon}>×</Text>
-        </View>
-      </TouchableOpacity>
-      
-      {/* Page Indicator */}
-      <View style={styles.pageIndicator}>
-        {slides.map((_, index) => (
-          <View
-            key={index}
-            style={[
-              styles.dot,
-              { 
-                backgroundColor: currentTab === index ? '#007AFF' : '#007AFF',
-                opacity: currentTab === index ? 1 : 0.3,
-              },
-            ]}
-          />
-        ))}
-      </View>
-    </SafeAreaView>
-  );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: '#f8f9fa',
   },
-  mainScrollView: {
-    flex: 1,
-  },
-  slideContainer: {
-    width,
-    height,
-  },
-  
-  // Background Effects - Original blue decoration for welcome, subtle for others
-  backgroundBlur: {
+  backgroundCircle1: {
     position: 'absolute',
-    borderRadius: 200,
-  },
-  blur1: {
     width: 300,
     height: 300,
-    backgroundColor: '#007AFF',
-    opacity: 0.8,
-    top: -200,
-    left: -150,
+    borderRadius: 150,
+    backgroundColor: 'rgba(0, 122, 255, 0.8)',
+    top: -100,
+    left: -100,
+    opacity: 0.6,
   },
-  blur2: {
+  backgroundCircle2: {
+    position: 'absolute',
     width: 360,
     height: 360,
-    backgroundColor: '#007AFF',
-    opacity: 0.5,
-    bottom: 150,
-    right: 150,
+    borderRadius: 180,
+    backgroundColor: 'rgba(0, 122, 255, 0.5)',
+    bottom: -100,
+    right: -100,
+    opacity: 0.4,
   },
-  backgroundDecoration: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  
-  // Welcome Screen
-  welcomeContainer: {
+  slide: {
+    width,
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
+  glassPanel: {
+    borderRadius: 35,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+  },
+  glassPanelAndroid: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 35,
+    ...Platform.select({
+      android: {
+        elevation: 8,
+      },
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.1,
+        shadowRadius: 15,
+      },
+    }),
+  },
+  // Welcome slide styles
   welcomeContent: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
     paddingHorizontal: 20,
   },
   welcomeCard: {
-    width: '100%',
+    marginHorizontal: 0,
   },
-  welcomeGlass: {
-    padding: 50,
+  welcomeInner: {
+    padding: 40,
     alignItems: 'center',
-    marginHorizontal: 20,
-    borderRadius: 35,
-    paddingVertical: 50,
   },
   appIcon: {
     width: 100,
     height: 100,
-    borderRadius: 20,
     marginBottom: 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 5,
   },
   titleContainer: {
     alignItems: 'center',
     marginBottom: 15,
   },
-  welcomeSubtitle: {
-    fontSize: 18,
+  welcomeTitle: {
+    fontSize: 20,
     fontWeight: '500',
-    color: '#000',
+    color: '#666',
     marginBottom: 5,
   },
-  welcomeTitle: {
-    fontSize: 42,
+  brandTitle: {
+    fontSize: 48,
     fontWeight: 'bold',
     color: '#007AFF',
-    lineHeight: 50,
-  },
-  welcomeTitleSecond: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    color: '#007AFF',
-    marginTop: -10,
   },
   welcomePrompt: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
+    color: '#666',
     textAlign: 'center',
     lineHeight: 24,
   },
-  swipePrompt: {
-    marginTop: 40,
-    marginBottom: 60,
+  swipePromptContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 40,
+    gap: 8,
   },
   swipeText: {
-    fontSize: 16,
+    color: '#666',
     fontWeight: '600',
-    color: '#000',
+    fontSize: 16,
   },
-  
-  // Instruction Screen
-  instructionContainer: {
-    flex: 1,
+  // Instruction slide styles
+  instructionTitle: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginTop: 80,
+    marginBottom: 30,
+    marginHorizontal: 20,
+    color: '#333',
+  },
+  instructionCard: {
+    marginHorizontal: 20,
+    marginBottom: 30,
   },
   instructionContent: {
-    flex: 1,
+    padding: 30,
+  },
+  imageCarouselContainer: {
+    position: 'relative',
+    height: 250,
+    marginBottom: 25,
+  },
+  instructionImage: {
+    width: width - 80,
+    height: 250,
+  },
+  arrowButton: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -18,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     justifyContent: 'center',
     alignItems: 'center',
+    ...Platform.select({
+      android: {
+        elevation: 4,
+      },
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+    }),
   },
-  
-  // Get Started Button
-  getStartedButton: {
-    borderRadius: 25,
-    overflow: 'hidden',
+  leftArrow: {
+    left: 15,
   },
-  getStartedGradient: {
-    paddingVertical: 16,
-    paddingHorizontal: 32,
+  rightArrow: {
+    right: 15,
+  },
+  instructionsContainer: {
+    gap: 25,
+  },
+  instructionRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  iconContainer: {
+    width: 30,
     alignItems: 'center',
+    paddingTop: 2,
+  },
+  instructionText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#666',
+    lineHeight: 22,
+  },
+  // Get started button
+  getStartedContainer: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 60,
+  },
+  getStartedButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 40,
+    paddingVertical: 16,
+    borderRadius: 25,
+    ...Platform.select({
+      android: {
+        elevation: 4,
+      },
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+    }),
   },
   getStartedText: {
+    color: '#fff',
+    fontWeight: '600',
     fontSize: 18,
-    fontWeight: 'bold',
-    color: 'white',
   },
-  
-  // Image-only instruction styles
-  imageOnlyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  imageGlassPanel: {
-    borderRadius: 25,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  fullscreenImage: {
-    width: width - 40,
-    height: (width - 40) * 0.6, // Maintain aspect ratio for horizontal images
-    borderRadius: 25,
-    resizeMode: 'contain', // Keep full image visible with correct aspect ratio
-  },
-  overlayButton: {
-    position: 'absolute',
-    bottom: 100,
-    left: 20,
-    right: 20,
-  },
-  
-  // Close Button
+  // Close button and page indicators
   closeButton: {
     position: 'absolute',
-    top: 60,
+    top: Platform.OS === 'ios' ? 60 : 40,
     right: 20,
-    width: 44,
-    height: 44,
+    zIndex: 10,
   },
-  closeButtonContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(142, 142, 147, 0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 5,
-  },
-  closeIcon: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  
-  // Page Indicator
   pageIndicator: {
     position: 'absolute',
-    bottom: 40,
-    left: 0,
-    right: 0,
+    bottom: 20,
+    width: '100%',
     flexDirection: 'row',
     justifyContent: 'center',
+    alignItems: 'center',
     gap: 8,
   },
   dot: {
@@ -563,17 +695,10 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
-  
-  // Hidden preload styles
-  hiddenPreloadContainer: {
-    position: 'absolute',
-    top: -1000,
-    opacity: 0,
+  activeDot: {
+    backgroundColor: '#007AFF',
   },
-  hiddenImage: {
-    width: 1,
-    height: 1,
+  inactiveDot: {
+    backgroundColor: 'rgba(0, 122, 255, 0.3)',
   },
 });
-
-export default OnboardingView;
