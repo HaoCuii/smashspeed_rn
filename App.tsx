@@ -1,9 +1,22 @@
 // App.tsx
 
-import React from 'react';
-import DetectScreen from './src/screens/DetectScreen';
+import React, { useState } from 'react';
+import { View, Text } from 'react-native';
 
-const App: React.FC = () => {
+import DetectScreen from './src/screens/DetectScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+
+const App = () => {
+  const [showOnboarding, setShowOnboarding] = useState(true);
+
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+  };
+
+  if (showOnboarding) {
+    return <OnboardingScreen onComplete={handleOnboardingComplete} />;
+  }
+
   return <DetectScreen />;
 };
 
