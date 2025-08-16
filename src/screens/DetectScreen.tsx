@@ -8,9 +8,11 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Image,
-  ImageBackground, // Using ImageBackground for the aurora effect
-  Platform, // ADDED: To detect the operating system
-  StatusBar, // ADDED: To get the height of the Android status bar
+  ImageBackground,
+  Platform,
+  StatusBar,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import AppIcon from '../components/AppIcon';
 import GlassPanel from '../components/GlassPanel';
@@ -20,14 +22,13 @@ const DetectScreen: React.FC = () => {
   const [showRecordingGuide, setShowRecordingGuide] = useState(false);
 
   return (
-    // Using ImageBackground with the correct path to the asset in the root assets folder
     <ImageBackground
       style={styles.container}
-      source={require('../../assets/aurora_background.png')}>
+      source={require('../../assets/aurora_background.png')}
+    >
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            {/* Using the correct path for the header asset */}
             <Image
               source={require('../../assets/AppLabel.png')}
               style={styles.headerImage}
@@ -35,7 +36,6 @@ const DetectScreen: React.FC = () => {
             <Text style={styles.title}>Detect</Text>
           </View>
           <TouchableOpacity>
-            {/* Icon size decreased */}
             <AppIcon name="info.circle" fallbackName="info" size={22} color="#007AFF" />
           </TouchableOpacity>
         </View>
@@ -55,20 +55,123 @@ const DetectScreen: React.FC = () => {
           <Text style={styles.promptText}>Select a video to begin</Text>
           <TouchableOpacity
             style={styles.guideButton}
-            onPress={() => setShowRecordingGuide(true)}>
+            onPress={() => setShowRecordingGuide(true)}
+          >
             <AppIcon name="questionmark.circle" fallbackName="help-circle" size={16} color="#007AFF" />
             <Text style={styles.guideButtonText}>How to Record</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* HOW TO RECORD MODAL */}
+      <Modal
+        visible={showRecordingGuide}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowRecordingGuide(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setShowRecordingGuide(false)}
+          />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>How to Record a Great Smash Video</Text>
+            <ScrollView
+              style={{ maxHeight: 420, width: '100%' }}
+              contentContainerStyle={{ paddingBottom: 10 }}
+              showsVerticalScrollIndicator={false}
+            >
+              <GuideRow
+                icon="video"
+                label="Use landscape"
+                detail="Hold your phone horizontally so the racket and ball stay in frame."
+              />
+              <GuideRow
+                icon="focus"
+                label="Keep the subject centered"
+                detail="Stand ~3–5m away; make sure the full swing is visible without clipping."
+              />
+              <GuideRow
+                icon="sun.max"
+                label="Good lighting"
+                detail="Shoot in bright, even light. Avoid strong backlight that causes silhouettes."
+              />
+              <GuideRow
+                icon="camera.aperture"
+                label="Higher FPS if possible"
+                detail="60 fps (or higher) gives sharper frame-by-frame analysis."
+              />
+              <GuideRow
+                icon="figure.tennis"
+                label="Record 2–3 attempts"
+                detail="Capture a few smashes so the best one can be selected."
+              />
+              <PlatformHint />
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.modalPrimaryButton}
+              onPress={() => setShowRecordingGuide(false)}
+            >
+              <Text style={styles.modalPrimaryButtonText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ImageBackground>
+  );
+};
+
+/** Small inline helpers to keep JSX tidy */
+const GuideRow = ({
+  icon,
+  label,
+  detail,
+}: {
+  icon: string;
+  label: string;
+  detail: string;
+}) => (
+  <View style={styles.row}>
+    <AppIcon name={icon} fallbackName="check-circle" size={18} color="#007AFF" />
+    <View style={{ marginLeft: 12, flex: 1 }}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <Text style={styles.rowDetail}>{detail}</Text>
+    </View>
+  </View>
+);
+
+const PlatformHint = () => {
+  const isIOS = Platform.OS === 'ios';
+  return (
+    <View style={[styles.platformCard, isIOS ? styles.platformCardIOS : styles.platformCardAndroid]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <AppIcon
+          name={isIOS ? 'camera' : 'camera'}
+          fallbackName="camera"
+          size={16}
+          color={isIOS ? '#0A84FF' : '#34A853'}
+        />
+        <Text style={[styles.platformTitle, { marginLeft: 8 }]}>
+          {isIOS ? 'iOS tips' : 'Android tips'}
+        </Text>
+      </View>
+      <Text style={styles.platformBody}>
+        {isIOS
+          ? 'In Camera, set Format → 1080p at 60 fps for smoother playback.'
+          : 'In Camera, choose 1080p/60 fps in Settings if available for smoother playback.'}
+      </Text>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F2F2F7', // Fallback color in case image fails to load
+    backgroundColor: '#F2F2F7',
   },
   safeArea: {
     flex: 1,
@@ -76,7 +179,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    // CHANGED: Aligned items to the center to fix vertical alignment.
     alignItems: 'center',
     paddingHorizontal: 25,
     marginTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 10 : 10,
@@ -84,7 +186,6 @@ const styles = StyleSheet.create({
   headerLeft: {
     alignItems: 'flex-start',
   },
-  // Logo size increased
   headerImage: {
     width: 150,
     height: 35,
@@ -135,6 +236,86 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     fontSize: 14,
     fontWeight: '600',
+  },
+  /* Modal styles */
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  modalSheet: {
+    backgroundColor: '#FFF',
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    alignItems: 'center',
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D1D1D6',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+  },
+  rowLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 2,
+  },
+  rowDetail: {
+    fontSize: 14,
+    color: '#3A3A3C',
+    lineHeight: 19,
+  },
+  modalPrimaryButton: {
+    marginTop: 8,
+    width: '100%',
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
+  },
+  modalPrimaryButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  platformCard: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 12,
+  },
+  platformCardIOS: {
+    backgroundColor: '#E7F0FF',
+  },
+  platformCardAndroid: {
+    backgroundColor: '#E9F6EC',
+  },
+  platformTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 6,
+  },
+  platformBody: {
+    fontSize: 13,
+    color: '#333',
+    marginTop: 6,
+    lineHeight: 18,
   },
 });
 
