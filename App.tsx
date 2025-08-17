@@ -12,12 +12,14 @@ import DetectScreen from './src/screens/DetectScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import TrimScreen from './src/screens/TrimScreen';
 import CalibrationScreen from './src/screens/CalibrationScreen';
+import AnalyzeScreen from './src/screens/AnalyzeScreen'; // ← NEW
 
-// ---------- Route types (Step 3) ----------
+// ---------- Route types ----------
 export type RootStackParamList = {
   Tabs: undefined;
   Trim: { sourceUri: string; duration: number };
   Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
+  Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number }; // ← NEW
 };
 
 // --- Placeholder Screens ---
@@ -39,7 +41,6 @@ function AccountScreen() {
 
 // --- Navigators ---
 const Tab = createBottomTabNavigator();
-// Step 3: type the stack with RootStackParamList
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const MainTabs = () => {
@@ -93,6 +94,11 @@ const RootNavigator = () => {
       <Stack.Screen
         name="Calibration"
         component={CalibrationScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Analyze"
+        component={AnalyzeScreen}
         options={{ headerShown: false }}
       />
     </Stack.Navigator>

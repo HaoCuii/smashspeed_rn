@@ -20,7 +20,18 @@ const AnimatedLine = Animated.createAnimatedComponent(Line);
 
 // Define navigation types
 type RootStackParamList = {
-  Calibration: { sourceUri: string };
+  Calibration: {
+    sourceUri: string;
+    duration: number;
+    startSec: number;
+    endSec: number;
+  };
+  Analyze: {
+    sourceUri: string;
+    startSec: number;
+    endSec: number;
+    metersPerPixel: number;
+  };
 };
 type CalibRoute = RouteProp<RootStackParamList, 'Calibration'>;
 
@@ -140,21 +151,32 @@ export default function CalibrationScreen() {
       return;
     }
 
+    // distance between the two draggable points (in container coords)
     const dx = (positionX2.value + offsetX2.value) - (positionX1.value + offsetX1.value);
     const dy = (positionY2.value + offsetY2.value) - (positionY1.value + offsetY1.value);
     const pointDistance = Math.sqrt(dx * dx + dy * dy);
 
-    const scaleRatio = Math.min(boxW / videoW.current, boxH / videoH.current);
+    // container shows the video with `contain` → uniform scale, translation doesn’t affect distance
+    const scaleRatio = Math.min(boxW / videoW.current, boxH / videoH.current); // pixels_on_screen = pixels_in_video * scaleRatio
     const pixelDistance = pointDistance / scaleRatio;
 
-    if (pixelDistance === 0) {
+    if (!Number.isFinite(pixelDistance) || pixelDistance <= 0) {
       Alert.alert('Invalid Points', 'Please move the handles to two distinct points.');
       return;
     }
 
-    const scaleFactor = realLength / pixelDistance;
-    Alert.alert('Calibration Complete!', `The calculated scale factor is:\n${scaleFactor.toFixed(6)} meters/pixel`);
+    const metersPerPixel = realLength / pixelDistance;
+
+    // ✅ Go to the analyzer screen with everything it needs to run inference + draw boxes
+    // @ts-ignore
+    navigation.navigate('Analyze', {
+      sourceUri,
+      startSec: route.params.startSec,
+      endSec: route.params.endSec,
+      metersPerPixel,
+    });
   };
+
 
   return (
     <SafeAreaView style={styles.root}>
