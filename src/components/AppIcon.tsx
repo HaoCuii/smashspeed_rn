@@ -1,26 +1,57 @@
 // AppIcon.tsx
-
 import React from 'react';
-import { Platform } from 'react-native';
-import { SFSymbol } from 'react-native-sfsymbols'; // CHANGED: Using a named import
-import VectorIcon from 'react-native-vector-icons/Feather';
+import { Platform, StyleProp, View, ViewStyle, TextStyle } from 'react-native';
+import Feather from 'react-native-vector-icons/Feather';
+import { SFSymbol } from 'react-native-sfsymbols';
 
-interface AppIconProps {
-  name: string;
-  fallbackName: string;
-  size: number;
-  color: string;
-  style?: object;
-}
+type FeatherName = React.ComponentProps<typeof Feather>['name'];
 
-const AppIcon: React.FC<AppIconProps> = ({ name, fallbackName, ...props }) => {
-  // On iOS, we render the high-fidelity SF Symbol.
-  if (Platform.OS === 'ios') {
-    return <SFSymbol name={name} {...props} />;
-  }
-
-  // On Android, we render the fallback icon from react-native-vector-icons.
-  return <VectorIcon name={fallbackName} {...props} />;
+type Props = {
+  name?: string;                // SF Symbol (iOS)
+  fallbackName: FeatherName;    // Feather icon (Android / fallback)
+  size?: number;
+  color?: string;
+  style?: StyleProp<ViewStyle | TextStyle>;
+  accessibilityLabel?: string;  // we'll use this on Feather or a wrapper View
 };
 
-export default AppIcon;
+export default function AppIcon({
+  name,
+  fallbackName,
+  size = 18,
+  color = '#000',
+  style,
+  accessibilityLabel,
+}: Props) {
+  if (Platform.OS === 'ios' && name) {
+    // Build the SFSymbol element WITHOUT accessibilityLabel (prop not supported)
+    const symbol = (
+      <SFSymbol
+        name={name}
+        size={size}
+        color={color as string}
+        multicolor={false}
+        // Some versions size via style width/height as well:
+        style={[{ width: size, height: size }, style] as StyleProp<ViewStyle>}
+      />
+    );
+
+    // If you still want an a11y label on iOS, wrap it:
+    return accessibilityLabel ? (
+      <View accessible accessibilityLabel={accessibilityLabel}>{symbol}</View>
+    ) : (
+      symbol
+    );
+  }
+
+  // Feather supports accessibilityLabel directly
+  return (
+    <Feather
+      name={fallbackName}
+      size={size}
+      color={color}
+      style={style}
+      accessibilityLabel={accessibilityLabel}
+    />
+  );
+}

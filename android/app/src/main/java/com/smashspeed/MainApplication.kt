@@ -1,6 +1,7 @@
 package com.smashspeed
 
 import android.app.Application
+import com.smashspeed.VideoTrimmerPackage
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
@@ -16,8 +17,7 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              // add(MyReactNativePackage())
+              add(VideoTrimmerPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
