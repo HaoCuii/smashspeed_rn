@@ -183,7 +183,7 @@ const TrimScreen: React.FC = () => {
   const onPreview = React.useCallback(() => {
     if (!(endSec > startSec)) return;
     setIsPreview(true);
-    setPaused(false);
+    setPaused(true);
     requestAnimationFrame(() => videoRef.current?.seek(startSec));
   }, [startSec, endSec]);
 

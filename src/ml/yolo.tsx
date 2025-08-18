@@ -1,31 +1,48 @@
 // src/ml/yolo.ts
 import { NativeModules } from 'react-native';
 
+// Updated native module interface
 const { YoloDetector } = NativeModules as {
   YoloDetector: {
     warmup: () => Promise<void>;
-    detectVideo: (path: string, fps: number) =>
-      Promise<Array<{ t: number; boxes: Box[] }>>;
+    detectVideo: (
+      path: string,
+      fps: number,
+      startSec: number,
+      endSec: number,
+    ) => Promise<void>; // Promise is now void, results are streamed
   };
 };
 
 // Boxes are returned in MODEL space (640×640, top-left x/y)
 export type Box = {
-  x: number; y: number; width: number; height: number; confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
 };
 
-export async function runDetection(videoPath: string, fps = 10) {
+/**
+ * Kicks off the native video processing.
+ * Results will be streamed via DeviceEventEmitter.
+ */
+export async function runDetection(
+  videoPath: string,
+  fps: number,
+  startSec: number,
+  endSec: number,
+) {
   await YoloDetector.warmup();
-  return YoloDetector.detectVideo(videoPath, fps);
+  // Call the native method with all required arguments
+  return YoloDetector.detectVideo(videoPath, fps, startSec, endSec);
 }
 
 /**
  * Map a MODEL-space box (after our 640×640 letterbox preprocess)
  * back to ORIGINAL VIDEO pixel space (w×h).
  */
-export function mapModelToVideo(
-  b: Box, videoW: number, videoH: number
-) {
+export function mapModelToVideo(b: Box, videoW: number, videoH: number) {
   const scale = Math.min(640 / videoW, 640 / videoH); // same as preprocess
   const drawnW = videoW * scale;
   const drawnH = videoH * scale;
@@ -35,7 +52,7 @@ export function mapModelToVideo(
 
   const x = (b.x - padX) * inv;
   const y = (b.y - padY) * inv;
-  const width  = b.width  * inv;
+  const width = b.width * inv;
   const height = b.height * inv;
   return { x, y, width, height, confidence: b.confidence };
 }

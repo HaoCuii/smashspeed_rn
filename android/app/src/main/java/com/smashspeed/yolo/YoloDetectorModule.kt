@@ -8,6 +8,7 @@ import com.facebook.react.bridge.*
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import ai.onnxruntime.*
 import ai.onnxruntime.TensorInfo
 import java.nio.FloatBuffer
@@ -31,7 +32,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
         // opts.addNnapi()
         session = env!!.createSession(modelBytes, opts)
 
-        // Log input/output info once (useful for debugging shapes)
         session?.let { s ->
           for ((name, v) in s.inputInfo) {
             val ti = v.info as TensorInfo
@@ -50,13 +50,10 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
   }
 
   @ReactMethod
-  fun detectVideo(path: String, fps: Int, promise: Promise) {
+  fun detectVideo(path: String, fps: Int, startSec: Double, endSec: Double, promise: Promise) {
     Thread {
       val retriever = MediaMetadataRetriever()
       try {
-        val results = Arguments.createArray()
-        val safeFps = if (fps > 0) fps else 10
-
         val uri = Uri.parse(path)
         if (uri.scheme == "content" || uri.scheme == "file") {
           retriever.setDataSource(reactContext, uri)
@@ -64,29 +61,47 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
           retriever.setDataSource(path)
         }
 
-        val durationUs = retriever.extractMetadata(
-          MediaMetadataRetriever.METADATA_KEY_DURATION
-        )!!.toLong() * 1000L
-
-        val stepUs = 1_000_000L / safeFps
-        var tUs = 0L
-
-        while (tUs < durationUs) {
-          val bmp = retriever.getFrameAtTime(tUs, MediaMetadataRetriever.OPTION_CLOSEST)
-          if (bmp != null) {
-            val chw = preprocessLetterbox640(bmp) // FloatArray CHW (RGB) in [0..1]
-            val dets = runOrtDecodeNms(chw)       // List<WritableMap>
-            val item = Arguments.createMap().apply {
-              putDouble("t", tUs / 1000.0)        // ms
-              putArray("boxes", detsToWritable(dets))
-            }
-            results.pushMap(item)
-            bmp.recycle()
-          }
-          tUs += stepUs
+        val targetFps = if (fps > 0) {
+            fps
+        } else {
+            val frameRateStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+            frameRateStr?.toFloatOrNull()?.toInt() ?: 30
+        }
+        
+        val startUs = (startSec * 1_000_000).toLong()
+        val endUs = (endSec * 1_000_000).toLong()
+        val durationUs = endUs - startUs
+        
+        if (durationUs <= 0) {
+            promise.resolve(null)
+            return@Thread
         }
 
-        promise.resolve(results)
+        val stepUs = 1_000_000L / targetFps
+        val numFrames = Math.round(durationUs.toDouble() / stepUs)
+
+        for (i in 0 until numFrames) {
+            val tUs = startUs + (i * stepUs)
+            // FIXED: Change option to sync with the video player's seek behavior
+            val bmp = retriever.getFrameAtTime(tUs, MediaMetadataRetriever.OPTION_PREVIOUS_SYNC)
+
+            if (bmp != null) {
+                val chw = preprocessLetterbox640(bmp)
+                val dets = runOrtDecodeNms(chw)
+                val item = Arguments.createMap().apply {
+                  putDouble("t", tUs / 1000.0) // ms
+                  putArray("boxes", detsToWritable(dets))
+                }
+                
+                reactContext
+                  .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                  .emit("onFrameDetected", item)
+                  
+                bmp.recycle()
+            }
+        }
+        
+        promise.resolve(null)
       } catch (e: Exception) {
         promise.reject("detect_error", e)
       } finally {
@@ -118,18 +133,14 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
     val pixels = IntArray(plane)
     dst.getPixels(pixels, 0, W, 0, 0, W, H)
 
-    // CHW layout
     val out = FloatArray(3 * plane)
-    var r = 0
-    var g = plane
-    var b = 2 * plane
-    var p = 0
+    var r = 0; var g = plane; var b = 2 * plane; var p = 0
     for (y in 0 until H) {
       for (x in 0 until W) {
         val px = pixels[p++]
         out[r++] = ((px shr 16) and 0xFF) / 255f
         out[g++] = ((px shr 8) and 0xFF) / 255f
-        out[b++] = ( px        and 0xFF) / 255f
+        out[b++] = ( px and 0xFF) / 255f
       }
     }
     dst.recycle()
@@ -140,7 +151,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
   private fun runOrtDecodeNms(chw: FloatArray): List<WritableMap> {
     val env = env ?: throw IllegalStateException("ORT not initialized")
     val session = session ?: throw IllegalStateException("Session not created")
-
     val inputName = session.inputNames.iterator().next()
 
     val fb = FloatBuffer.wrap(chw)
@@ -150,7 +160,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
       session.run(mapOf(inputName to tensor)).use { result ->
         @Suppress("UNCHECKED_CAST")
         val rows = (result.get(0).value as Array<Array<FloatArray>>)[0]
-        // rows: [numBoxes][6] → x,y,w,h,obj,clsProb
 
         val pre = mutableListOf<FloatArray>() // [x,y,w,h,conf]
         for (r in rows) {
