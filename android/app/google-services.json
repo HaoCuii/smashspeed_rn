@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "848530128344",
+    "project_id": "smashspeed5",
+    "storage_bucket": "smashspeed5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:848530128344:android:af5c264470ba6eddb3c6ad",
+        "android_client_info": {
+          "package_name": "com.smashspeed"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "848530128344-0ob2umvug1emgm29r33o6vrmnd314582.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAOwK_DislkoC3Dxpn-JiqIFS9hvPm6v8o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "848530128344-0ob2umvug1emgm29r33o6vrmnd314582.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "848530128344-b11e0llntn93rgs56nt95j49vj25vkp8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.diwenne.smashspeed-ios",
+                "app_store_id": "6748543435"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

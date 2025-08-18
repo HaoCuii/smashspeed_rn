@@ -277,6 +277,7 @@ function InstructionSlide({ slide, currentSlide, slideIndex, onComplete }) {
       </ScrollView>
     </View>
   );
+  
 }
 
 //================================================================================
@@ -319,11 +320,11 @@ export default function Onboarding({ onComplete }) {
           )}
           onMomentumScrollEnd={ev => setCurrentSlide(Math.round(ev.nativeEvent.contentOffset.x / width))}
         />
-        {currentSlide === slides.length - 1 && (
+
           <TouchableOpacity onPress={onComplete} style={styles.closeButton}>
             <Ionicons name="close-circle" size={32} color="rgba(128, 128, 128, 0.8)" />
           </TouchableOpacity>
-        )}
+        
         <PageIndicator />
       </View>
     </>
@@ -339,8 +340,8 @@ const styles = StyleSheet.create({
   slide: { width: width, flex: 1 },
   backgroundCircle1: { position: 'absolute', width: 300, height: 300, borderRadius: 150, backgroundColor: 'rgba(0, 122, 255, 0.8)', top: -100, left: -100, opacity: 0.6 },
   backgroundCircle2: { position: 'absolute', width: 360, height: 360, borderRadius: 180, backgroundColor: 'rgba(0, 122, 255, 0.5)', bottom: -100, right: -100, opacity: 0.4 },
-  glassPanel: { borderRadius: 35, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 0.8)' },
-  glassPanelAndroid: { backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 35, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.1, shadowRadius: 15 },
+  glassPanel: { borderRadius: 35, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 1)' },
+  glassPanelAndroid: { backgroundColor: 'rgba(255, 255, 255, 1)', borderRadius: 35, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.1, shadowRadius: 15 },
   welcomeContent: { flex: 1, justifyContent: 'center', paddingHorizontal: 20 },
   welcomeCard: { marginHorizontal: 0 },
   welcomeInner: { padding: 40, alignItems: 'center' },

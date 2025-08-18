@@ -13,6 +13,8 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import TrimScreen from './src/screens/TrimScreen';
 import CalibrationScreen from './src/screens/CalibrationScreen';
 import AnalyzeScreen from './src/screens/AnalyzeScreen'; // ← NEW
+import ResultsScreen from './src/screens/ResultsScreen';
+import AccountScreen from './src/screens/AccountScreen';
 
 // ---------- Route types ----------
 export type RootStackParamList = {
@@ -21,23 +23,6 @@ export type RootStackParamList = {
   Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
   Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number }; // ← NEW
 };
-
-// --- Placeholder Screens ---
-function ResultsScreen() {
-  return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-      <Text>Results</Text>
-    </View>
-  );
-}
-
-function AccountScreen() {
-  return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-      <Text>Account</Text>
-    </View>
-  );
-}
 
 // --- Navigators ---
 const Tab = createBottomTabNavigator();
