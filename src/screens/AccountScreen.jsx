@@ -12,6 +12,7 @@ import {
   Dimensions,
   SafeAreaView,
   StatusBar,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import auth, { onAuthStateChanged } from '@react-native-firebase/auth';
@@ -28,6 +29,14 @@ GoogleSignin.configure({
 
 const { width, height } = Dimensions.get('window');
 
+// Get safe area insets for proper spacing
+const getStatusBarHeight = () => {
+  if (Platform.OS === 'ios') {
+    return height >= 812 ? 44 : 20; // iPhone X and above vs older iPhones
+  }
+  return StatusBar.currentHeight || 24;
+};
+
 // Context for authentication state
 const AuthContext = React.createContext();
 
@@ -37,22 +46,70 @@ const AccountView = () => {
   const [user, setUser] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const [infoMessage, setInfoMessage] = useState(null);
+  const [userSettings, setUserSettings] = useState({
+    appearanceMode: 'system',
+    profilePicture: null,
+    displayName: '',
+    notificationsEnabled: true,
+  });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth(), (user) => {
       if (user) {
         setAuthState('signedIn');
         setUser(user);
-        // Save user data to Firestore
-        //saveUserToFirestore(user);
+        loadUserSettings(user.uid);
+        saveUserToFirestore(user);
       } else {
         setAuthState('signedOut');
         setUser(null);
+        setUserSettings({
+          appearanceMode: 'system',
+          profilePicture: null,
+          displayName: '',
+          notificationsEnabled: true,
+        });
       }
     });
 
     return unsubscribe;
   }, []);
+
+  const loadUserSettings = async (userId) => {
+    try {
+      const userSettingsDoc = await firestore()
+        .collection('users')
+        .doc(userId)
+        .collection('userSettings')
+        .doc('preferences')
+        .get();
+      
+      if (userSettingsDoc.exists) {
+        const settings = userSettingsDoc.data();
+        setUserSettings(prevSettings => ({ ...prevSettings, ...settings }));
+      } else {
+        // Create default settings document
+        await saveUserSettings(userId, userSettings);
+      }
+    } catch (error) {
+      console.error('Error loading user settings:', error);
+    }
+  };
+
+  const saveUserSettings = async (userId, settings) => {
+    try {
+      await firestore()
+        .collection('users')
+        .doc(userId)
+        .collection('userSettings')
+        .doc('preferences')
+        .set(settings, { merge: true });
+      
+      setUserSettings(prevSettings => ({ ...prevSettings, ...settings }));
+    } catch (error) {
+      console.error('Error saving user settings:', error);
+    }
+  };
 
   const saveUserToFirestore = async (user) => {
     try {
@@ -168,6 +225,7 @@ const AccountView = () => {
   const contextValue = {
     authState,
     user,
+    userSettings,
     errorMessage,
     infoMessage,
     signOut,
@@ -178,13 +236,14 @@ const AccountView = () => {
     signUp,
     sendPasswordReset,
     updatePassword,
+    saveUserSettings,
     setErrorMessage,
     setInfoMessage,
   };
 
   return (
     <AuthContext.Provider value={contextValue}>
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#007AFF" />
         
         {/* Background Gradient */}
@@ -197,21 +256,25 @@ const AccountView = () => {
         <View style={[styles.floatingCircle, styles.circle1]} />
         <View style={[styles.floatingCircle, styles.circle2]} />
 
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>
-            {authState === 'signedIn' ? 'My Account' : 'Welcome'}
-          </Text>
-          <TouchableOpacity style={styles.menuButton}>
-            <Icon name="settings" size={24} color="#666" />
-          </TouchableOpacity>
-        </View>
+        {/* Fixed Header with proper safe area */}
+        <SafeAreaView style={styles.safeAreaHeader}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>
+              {authState === 'signedIn' ? 'My Account' : 'Welcome'}
+            </Text>
+            {authState === 'signedIn' && (
+              <TouchableOpacity style={styles.menuButton}>
+                <Icon name="settings" size={24} color="#666" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </SafeAreaView>
 
-        {/* Main Content */}
+        {/* Main Content with proper spacing */}
         <View style={styles.content}>
           {authState === 'unknown' && (
             <View style={styles.loadingContainer}>
-              <Text>Loading...</Text>
+              <Text style={styles.loadingText}>Loading...</Text>
             </View>
           )}
           
@@ -221,15 +284,14 @@ const AccountView = () => {
           
           {authState === 'signedOut' && <AuthView />}
         </View>
-      </SafeAreaView>
+      </View>
     </AuthContext.Provider>
   );
 };
 
 // Logged In View Component
 const LoggedInView = ({ user }) => {
-  const { signOut, deleteAccount } = useContext(AuthContext);
-  const [appearanceMode, setAppearanceMode] = useState('system');
+  const { signOut, deleteAccount, userSettings, saveUserSettings } = useContext(AuthContext);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -261,16 +323,43 @@ const LoggedInView = ({ user }) => {
     );
   };
 
+  const updateAppearanceMode = (mode) => {
+    const newSettings = { ...userSettings, appearanceMode: mode };
+    saveUserSettings(user.uid, newSettings);
+  };
+
   return (
-    <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    <ScrollView 
+      style={styles.scrollView} 
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.scrollViewContent}
+    >
       {/* Profile Header */}
       <View style={styles.glassPanel}>
         <View style={styles.profileHeader}>
-          <Icon name="account-circle" size={60} color="#4CAF50" />
+          <View style={styles.profilePictureContainer}>
+            {userSettings.profilePicture ? (
+              <Image 
+                source={{ uri: userSettings.profilePicture }} 
+                style={styles.profilePicture}
+              />
+            ) : (
+              <Icon name="account-circle" size={60} color="#4CAF50" />
+            )}
+          </View>
           <View style={styles.profileInfo}>
             <Text style={styles.emailText}>{user.email || 'No Email'}</Text>
             <Text style={styles.memberSinceText}>Member since {memberSince}</Text>
           </View>
+          <TouchableOpacity 
+            style={styles.editProfileButton}
+            onPress={() => {
+              // Handle profile edit - could open image picker for profile picture
+              Alert.alert('Edit Profile', 'Profile editing coming soon!');
+            }}
+          >
+            <Icon name="edit" size={20} color="#007AFF" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -286,13 +375,13 @@ const LoggedInView = ({ user }) => {
                 key={mode}
                 style={[
                   styles.segmentButton,
-                  appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentButtonActive
+                  userSettings.appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentButtonActive
                 ]}
-                onPress={() => setAppearanceMode(mode.toLowerCase())}
+                onPress={() => updateAppearanceMode(mode.toLowerCase())}
               >
                 <Text style={[
                   styles.segmentText,
-                  appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentTextActive
+                  userSettings.appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentTextActive
                 ]}>
                   {mode}
                 </Text>
@@ -309,6 +398,7 @@ const LoggedInView = ({ user }) => {
         >
           <Icon name="help" size={20} color="#007AFF" />
           <Text style={styles.settingButtonText}>View Tutorial</Text>
+          <Icon name="chevron-right" size={20} color="#C7C7CC" />
         </TouchableOpacity>
       </View>
 
@@ -322,6 +412,7 @@ const LoggedInView = ({ user }) => {
         >
           <Icon name="public" size={20} color="#007AFF" />
           <Text style={styles.settingButtonText}>Official Website</Text>
+          <Icon name="open-in-new" size={16} color="#C7C7CC" />
         </TouchableOpacity>
 
         <View style={styles.divider} />
@@ -332,6 +423,7 @@ const LoggedInView = ({ user }) => {
         >
           <Icon name="camera-alt" size={20} color="#007AFF" />
           <Text style={styles.settingButtonText}>Follow on Instagram</Text>
+          <Icon name="open-in-new" size={16} color="#C7C7CC" />
         </TouchableOpacity>
 
         <View style={styles.divider} />
@@ -342,6 +434,7 @@ const LoggedInView = ({ user }) => {
         >
           <Icon name="mail" size={20} color="#007AFF" />
           <Text style={styles.settingButtonText}>Contact Support</Text>
+          <Icon name="open-in-new" size={16} color="#C7C7CC" />
         </TouchableOpacity>
       </View>
 
@@ -355,6 +448,7 @@ const LoggedInView = ({ user }) => {
         >
           <Icon name="lock" size={20} color="#007AFF" />
           <Text style={styles.settingButtonText}>Change Password</Text>
+          <Icon name="chevron-right" size={20} color="#C7C7CC" />
         </TouchableOpacity>
 
         <View style={styles.divider} />
@@ -372,6 +466,9 @@ const LoggedInView = ({ user }) => {
         </TouchableOpacity>
       </View>
 
+      {/* Bottom spacing for safe area */}
+      <View style={styles.bottomSpacer} />
+
       {/* Change Password Modal */}
       <ChangePasswordModal
         visible={showChangePasswordModal}
@@ -385,10 +482,23 @@ const LoggedInView = ({ user }) => {
 const ChangePasswordModal = ({ visible, onClose }) => {
   const { updatePassword } = useContext(AuthContext);
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
 
   const handleUpdatePassword = () => {
+    if (newPassword !== confirmPassword) {
+      setFeedbackMessage('Passwords do not match');
+      setIsSuccess(false);
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setFeedbackMessage('Password must be at least 6 characters');
+      setIsSuccess(false);
+      return;
+    }
+
     updatePassword(newPassword, (success, message) => {
       setIsSuccess(success);
       setFeedbackMessage(message);
@@ -396,28 +506,56 @@ const ChangePasswordModal = ({ visible, onClose }) => {
         setTimeout(() => {
           onClose();
           setNewPassword('');
+          setConfirmPassword('');
           setFeedbackMessage('');
         }, 2000);
       }
     });
   };
 
+  const resetModal = () => {
+    setNewPassword('');
+    setConfirmPassword('');
+    setFeedbackMessage('');
+    setIsSuccess(false);
+  };
+
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+    <Modal 
+      visible={visible} 
+      animationType="slide" 
+      presentationStyle="pageSheet"
+      onRequestClose={() => {
+        onClose();
+        resetModal();
+      }}
+    >
       <SafeAreaView style={styles.modalContainer}>
         <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Change Password</Text>
-          <TouchableOpacity onPress={onClose}>
+          <TouchableOpacity onPress={() => {
+            onClose();
+            resetModal();
+          }}>
             <Text style={styles.cancelButton}>Cancel</Text>
           </TouchableOpacity>
+          <Text style={styles.modalTitle}>Change Password</Text>
+          <View style={{ width: 60 }} />
         </View>
 
-        <View style={styles.modalContent}>
+        <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
           <ModernTextField
             label="New Password"
             placeholder="Enter new password"
             value={newPassword}
             onChangeText={setNewPassword}
+            secureTextEntry={true}
+          />
+
+          <ModernTextField
+            label="Confirm Password"
+            placeholder="Confirm new password"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
             secureTextEntry={true}
           />
 
@@ -430,14 +568,14 @@ const ChangePasswordModal = ({ visible, onClose }) => {
           <TouchableOpacity
             style={[
               styles.primaryButton,
-              !newPassword && styles.disabledButton
+              (!newPassword || !confirmPassword) && styles.disabledButton
             ]}
             onPress={handleUpdatePassword}
-            disabled={!newPassword}
+            disabled={!newPassword || !confirmPassword}
           >
             <Text style={styles.primaryButtonText}>Update Password</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -448,7 +586,11 @@ const AuthView = () => {
   const [isSigningUp, setIsSigningUp] = useState(false);
 
   return (
-    <View style={styles.authContainer}>
+    <ScrollView 
+      style={styles.authContainer}
+      contentContainerStyle={styles.authContainerContent}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.glassPanel}>
         <View style={styles.authFormContainer}>
           {isSigningUp ? (
@@ -462,7 +604,7 @@ const AuthView = () => {
       <Text style={styles.authPrompt}>
         Sign in to sync your data across devices and access premium features.
       </Text>
-    </View>
+    </ScrollView>
   );
 };
 
@@ -473,6 +615,10 @@ const SignInForm = ({ isSigningUp, setIsSigningUp }) => {
   const [password, setPassword] = useState('');
 
   const handleSignIn = () => {
+    if (!email || !password) {
+      setErrorMessage('Please enter both email and password');
+      return;
+    }
     signIn(email, password);
   };
 
@@ -531,10 +677,12 @@ const SignInForm = ({ isSigningUp, setIsSigningUp }) => {
       </View>
 
       {/* Apple Sign In Button */}
-      <TouchableOpacity style={styles.appleButton} onPress={signInWithApple}>
-        <Icon name="apple" size={20} color="white" />
-        <Text style={styles.appleButtonText}>Sign in with Apple</Text>
-      </TouchableOpacity>
+      {Platform.OS === 'ios' && (
+        <TouchableOpacity style={styles.appleButton} onPress={signInWithApple}>
+          <Icon name="apple" size={20} color="white" />
+          <Text style={styles.appleButtonText}>Sign in with Apple</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Google Sign In Button */}
       <TouchableOpacity style={styles.googleButton} onPress={signInWithGoogle}>
@@ -553,11 +701,20 @@ const CreateAccountForm = ({ isSigningUp, setIsSigningUp }) => {
   const { signUp, errorMessage, setErrorMessage } = useContext(AuthContext);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
 
-  const isFormValid = email && password && hasAcceptedTerms;
+  const isFormValid = email && password && confirmPassword && hasAcceptedTerms && password === confirmPassword;
 
   const handleSignUp = () => {
+    if (password !== confirmPassword) {
+      setErrorMessage('Passwords do not match');
+      return;
+    }
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters');
+      return;
+    }
     signUp(email, password);
   };
 
@@ -583,6 +740,17 @@ const CreateAccountForm = ({ isSigningUp, setIsSigningUp }) => {
         value={password}
         onChangeText={(text) => {
           setPassword(text);
+          setErrorMessage(null);
+        }}
+        secureTextEntry={true}
+      />
+
+      <ModernTextField
+        label="Confirm Password"
+        placeholder="Confirm your password"
+        value={confirmPassword}
+        onChangeText={(text) => {
+          setConfirmPassword(text);
           setErrorMessage(null);
         }}
         secureTextEntry={true}
@@ -697,15 +865,19 @@ const styles = StyleSheet.create({
     bottom: 100,
     right: -75,
   },
+  safeAreaHeader: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
+    zIndex: 1000,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    paddingTop: 50,
+    paddingBottom: 20,
   },
   headerTitle: {
     fontSize: 18,
@@ -713,7 +885,9 @@ const styles = StyleSheet.create({
     color: '#000',
   },
   menuButton: {
-    padding: 5,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
   content: {
     flex: 1,
@@ -723,12 +897,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+  },
   scrollView: {
     flex: 1,
+  },
+  scrollViewContent: {
     paddingTop: 20,
   },
   glassPanel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: 'rgba(255, 255, 255, 1)',
     marginHorizontal: 20,
     marginBottom: 20,
     padding: 25,
@@ -743,9 +923,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  profilePictureContainer: {
+    marginRight: 15,
+  },
+  profilePicture: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
   profileInfo: {
-    marginLeft: 15,
     flex: 1,
+  },
+  editProfileButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
   },
   emailText: {
     fontSize: 18,
@@ -799,21 +991,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
+    paddingHorizontal: 4,
   },
   settingButtonText: {
     fontSize: 16,
     color: '#007AFF',
     marginLeft: 10,
+    flex: 1,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#E5E5EA',
     marginVertical: 10,
   },
+  bottomSpacer: {
+    height: 50,
+  },
   authContainer: {
     flex: 1,
+  },
+  authContainerContent: {
     paddingTop: 40,
     paddingHorizontal: 20,
+    paddingBottom: 50,
   },
   authFormContainer: {
     // Container for form switching animation
@@ -868,10 +1068,12 @@ const styles = StyleSheet.create({
   },
   textFieldUnderlineFocused: {
     backgroundColor: '#007AFF',
+    height: 2,
   },
   forgotPasswordButton: {
     alignSelf: 'flex-end',
     marginBottom: 20,
+    paddingVertical: 5,
   },
   forgotPasswordText: {
     fontSize: 14,
@@ -880,9 +1082,14 @@ const styles = StyleSheet.create({
   primaryButton: {
     backgroundColor: '#007AFF',
     paddingVertical: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: 'center',
     marginBottom: 20,
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   primaryButtonText: {
     color: 'white',
@@ -891,6 +1098,8 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     backgroundColor: '#E5E5EA',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   dividerContainer: {
     flexDirection: 'row',
@@ -913,8 +1122,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     marginBottom: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   appleButtonText: {
     color: 'white',
@@ -928,8 +1142,13 @@ const styles = StyleSheet.create({
     borderColor: '#E5E5EA',
     alignItems: 'center',
     paddingVertical: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
   },
   googleButtonText: {
     color: '#000',
@@ -938,7 +1157,7 @@ const styles = StyleSheet.create({
   },
   switchAuthButton: {
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 15,
   },
   switchAuthText: {
     fontSize: 14,
@@ -948,9 +1167,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 20,
+    paddingHorizontal: 4,
   },
   checkbox: {
-    marginRight: 10,
+    marginRight: 12,
     marginTop: 2,
   },
   termsText: {
@@ -964,12 +1184,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 15,
+    backgroundColor: 'rgba(255, 59, 48, 0.1)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
   },
   successText: {
     color: '#4CAF50',
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 15,
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
   },
   modalContainer: {
     flex: 1,
@@ -981,7 +1209,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E5E5EA',
   },
@@ -993,6 +1221,7 @@ const styles = StyleSheet.create({
   cancelButton: {
     fontSize: 16,
     color: '#007AFF',
+    fontWeight: '500',
   },
   modalContent: {
     flex: 1,
@@ -1002,6 +1231,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
 });
 

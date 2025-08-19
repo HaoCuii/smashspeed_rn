@@ -1009,7 +1009,7 @@ const styles = StyleSheet.create({
   // Header
   header: {
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 50,
     paddingBottom: 24,
   },
   headerTitle: {
@@ -1392,4 +1392,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
+
 export default HistoryView;
