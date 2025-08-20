@@ -1,3 +1,4 @@
+// src/screens/AnalyzeScreen.tsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   View,
@@ -11,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Video, { OnLoadData } from 'react-native-video';
 import { runDetection, mapModelToVideo, Box } from '../ml/yolo';
+import { pxPerSecToKph } from '../ml/kalman'; // using only the converter
 
 type AnalyzeParams = {
   sourceUri: string;
@@ -29,6 +31,8 @@ type Selected =
   | { type: 'ai'; idx: number }
   | { type: 'user'; idx: number };
 
+type Result = { maxKph: number; atIndex: number } | null;
+
 export default function AnalyzeScreen({ route }: any) {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const { sourceUri, startSec, endSec, metersPerPixel } = route.params as AnalyzeParams;
@@ -39,15 +43,16 @@ export default function AnalyzeScreen({ route }: any) {
   const [drawRect, setDrawRect] = useState({ x: 0, y: 0, w: screenW, h: Math.floor(screenH * 0.6) });
   const [frames, setFrames] = useState<FrameDetections[]>([]);
 
-  // Current frame index being shown (of frames[])
+  // Current frame index being shown
   const [currentIndex, setCurrentIndex] = useState(0);
-  // Index we intend to show after seek finishes
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
 
-  // Per-frame user boxes (VIDEO px): { [frameIndex]: VBox[] }
+  // Manual boxes per-frame (video px)
   const [userBoxesByIndex, setUserBoxesByIndex] = useState<Record<number, VBox[]>>({});
-  // Currently selected box (AI or user), or null
   const [selected, setSelected] = useState<Selected | null>(null);
+
+  // Result modal state
+  const [result, setResult] = useState<Result>(null);
 
   const videoRef = useRef<VideoHandle | null>(null);
   const videoLoaded = useRef(false);
@@ -71,10 +76,10 @@ export default function AnalyzeScreen({ route }: any) {
     setPendingIndex(null);
     setUserBoxesByIndex({});
     setSelected(null);
+    setResult(null);
     didAutoSeek.current = false;
     try {
-      // Pass 0 for FPS to tell the native module to use the video's actual FPS
-      await runDetection(sourceUri, 0, startSec, endSec);
+      await runDetection(sourceUri, 0, startSec, endSec); // 0 => native uses actual fps
     } catch (e) {
       console.warn('Detection error', e);
       setFrames([]);
@@ -85,23 +90,23 @@ export default function AnalyzeScreen({ route }: any) {
 
   // Subscribe to native detection events
   useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener('onFrameDetected', (frame: FrameDetections) => {
+    const sub = DeviceEventEmitter.addListener('onFrameDetected', (frame: FrameDetections) => {
       setFrames(prev => [...prev, frame].sort((a, b) => a.t - b.t));
     });
     loadDetections();
-    return () => subscription.remove();
+    return () => sub.remove();
   }, [loadDetections]);
 
-  // Estimate FPS from detection timestamps (median of deltas)
+  // FPS estimate (used for seeking bias only)
   const approxFps = useMemo(() => {
-    if (frames.length < 2) return 30; // fallback
+    if (frames.length < 2) return 30;
     const deltas = frames.slice(1).map((f, i) => Math.max(1, f.t - frames[i].t)).sort((a, b) => a - b);
     const median = deltas[Math.floor(deltas.length / 2)] || 33.33;
     const fps = 1000 / median;
     return isFinite(fps) && fps > 1 ? fps : 30;
   }, [frames]);
 
-  // Seek helper that biases slightly earlier to avoid landing on a previous keyframe
+  // Seek helper with half-frame bias
   const seekToIndex = useCallback(
     (idx: number) => {
       if (!frames.length) return;
@@ -109,13 +114,12 @@ export default function AnalyzeScreen({ route }: any) {
       const halfFrame = 1 / (approxFps * 2);
       const tSec = Math.max(0, frames[clamped].t / 1000 - halfFrame);
       setPendingIndex(clamped);
-      setSelected(null); // clear selection when changing frames
+      setSelected(null);
       videoRef.current?.seek(tSec);
     },
     [frames, approxFps]
   );
 
-  // Commit the overlay only once the player has actually finished seeking
   const onSeek = () => {
     if (pendingIndex != null) {
       setCurrentIndex(pendingIndex);
@@ -123,22 +127,18 @@ export default function AnalyzeScreen({ route }: any) {
     }
   };
 
-  // When the video loads: set natural size and show either the trim start or first detection
   const onLoad = (meta: OnLoadData) => {
     setVw(meta.naturalSize.width || 0);
     setVh(meta.naturalSize.height || 0);
     videoLoaded.current = true;
 
     if (frames.length) {
-      // Jump to first detection; commit overlay in onSeek
       seekToIndex(0);
     } else {
-      // No detections yet—park the video at trim start for visual context
       videoRef.current?.seek(Math.max(0, startSec));
     }
   };
 
-  // If detections arrive after the video is ready, auto-seek once to the first detection
   useEffect(() => {
     if (videoLoaded.current && frames.length && !didAutoSeek.current) {
       didAutoSeek.current = true;
@@ -146,20 +146,25 @@ export default function AnalyzeScreen({ route }: any) {
     }
   }, [frames, seekToIndex]);
 
-  // Current frame + mapping
+  // Current frame object
   const current = frames.length ? frames[Math.max(0, Math.min(currentIndex, frames.length - 1))] : null;
 
-  // Detection boxes mapped to VIDEO px space
-  const detectedVideoBoxes: VBox[] = useMemo(() => {
+  // AI detections (VIDEO px) for current frame — TOP-1 by confidence
+  const detectedVideoBoxes = useMemo(() => {
     if (!current || !vw || !vh) return [];
-    return current.boxes.map(b => mapModelToVideo(b, vw, vh));
+    const mapped = current.boxes.map(b => {
+      const m = mapModelToVideo(b, vw, vh);
+      return { x: m.x, y: m.y, width: m.width, height: m.height, confidence: (b as any).confidence ?? 0 };
+    });
+    mapped.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+    return mapped.slice(0, 1); // only highest confidence box
   }, [current, vw, vh]);
 
-  // User boxes (VIDEO px) for current frame
+  // User boxes for current frame
   const userVideoBoxes: VBox[] = userBoxesByIndex[currentIndex] || [];
 
   // VIDEO px -> SCREEN px scale
-  const scale = useMemo(() => (!vw || !vh ? 1 : Math.min(drawRect.w / vw, drawRect.h / vh)), [drawRect, vw, vh]);
+  const scale = useMemo(() => (!vw || !vh) ? 1 : Math.min(drawRect.w / vw, drawRect.h / vh), [drawRect, vw, vh]);
 
   const toScreen = (b: VBox) => ({
     left: drawRect.x + b.x * scale,
@@ -175,25 +180,94 @@ export default function AnalyzeScreen({ route }: any) {
     ? 'Analyzing...'
     : 'No frames detected';
 
-  const meterReadout = useMemo(() => {
-    if (!vw || !vh) return null;
-    const widths = [
-      ...detectedVideoBoxes.map(m => m.width || 0),
-      ...userVideoBoxes.map(m => m.width || 0),
-    ];
-    const maxWpx = widths.length ? Math.max(...widths) : 0;
-    if (maxWpx <= 0) return null;
-    const meters = maxWpx * metersPerPixel;
-    return meters.toFixed(2) + ' m';
-  }, [detectedVideoBoxes, userVideoBoxes, metersPerPixel, vw, vh]);
+  // ---------- Centers per frame (user > top-1 AI) ----------
+  type Center = { x: number; y: number; tSec: number } | null;
 
-  const atStart = currentIndex <= 0;
-  const atEnd = frames.length ? currentIndex >= frames.length - 1 : true;
+  const centers: Center[] = useMemo(() => {
+    if (!vw || !vh || frames.length === 0) return [];
+    return frames.map((f, i) => {
+      const ub = (userBoxesByIndex[i] || [])[0];
+      if (ub) return { x: ub.x + ub.width / 2, y: ub.y + ub.height / 2, tSec: f.t / 1000 };
 
-  const prevFrame = () => seekToIndex(currentIndex - 1);
-  const nextFrame = () => seekToIndex(currentIndex + 1);
+      if (!f.boxes.length) return null;
+      const top = [...f.boxes]
+        .map(b => {
+          const m = mapModelToVideo(b, vw, vh);
+          return { cx: m.x + m.width / 2, cy: m.y + m.height / 2, conf: (b as any).confidence ?? 0 };
+        })
+        .sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0))[0];
+      return top ? { x: top.cx, y: top.cy, tSec: f.t / 1000 } : null;
+    });
+  }, [frames, vw, vh, userBoxesByIndex, mapModelToVideo]);
 
-  // -------- Manual box helpers --------
+  // ---------- Robust per-frame speed from deltas ----------
+  const speedsKph: (number | null)[] = useMemo(() => {
+    const out: (number | null)[] = new Array(centers.length).fill(null);
+    if (centers.length < 2) return out;
+
+    const MIN_DT = 1 / 240; // avoid infinitesimal dt
+    const MAX_DT = 0.5;     // ignore huge gaps
+
+    let lastIdx: number | null = null;
+
+    for (let i = 0; i < centers.length; i++) {
+      const c = centers[i];
+      if (!c) continue;
+
+      if (lastIdx == null) {
+        lastIdx = i;
+        continue;
+      }
+
+      const p = centers[lastIdx];
+      if (!p) { lastIdx = i; continue; }
+
+      let dt = c.tSec - p.tSec;
+      dt = Math.max(MIN_DT, Math.min(dt, MAX_DT));
+      const dx = c.x - p.x;
+      const dy = c.y - p.y;
+      const pxPerSec = Math.hypot(dx, dy) / dt;
+      const kph = pxPerSecToKph(pxPerSec, metersPerPixel);
+
+      out[i] = Number.isFinite(kph) ? kph : null;
+      lastIdx = i;
+    }
+    return out;
+  }, [centers, metersPerPixel]);
+
+  const currentSpeedKph = useMemo(() => {
+    if (!speedsKph.length) return null;
+    for (let i = currentIndex; i >= 0; i--) {
+      const v = speedsKph[i];
+      if (Number.isFinite(v as number)) return v as number;
+    }
+    return null;
+  }, [speedsKph, currentIndex]);
+
+  const speedLabel = currentSpeedKph != null ? `${currentSpeedKph.toFixed(1)} km/h` : '—';
+
+  // Max speed across run
+  const maxSpeed = useMemo(() => {
+    let best = { maxKph: -Infinity, atIndex: -1 };
+    for (let i = 0; i < speedsKph.length; i++) {
+      const v = speedsKph[i];
+      if (Number.isFinite(v as number) && (v as number) > best.maxKph) {
+        best = { maxKph: v as number, atIndex: i };
+      }
+    }
+    return best.maxKph === -Infinity ? null : best;
+  }, [speedsKph]);
+
+  const finish = () => {
+    if (!maxSpeed) {
+      setResult({ maxKph: 0, atIndex: -1 });
+      return;
+    }
+    setResult(maxSpeed);
+    seekToIndex(maxSpeed.atIndex);
+  };
+
+  // ---------- Manual box helpers ----------
   const clampBox = (b: VBox): VBox => {
     if (!vw || !vh) return b;
     const width = Math.max(2, Math.min(b.width, vw));
@@ -241,7 +315,6 @@ export default function AnalyzeScreen({ route }: any) {
     setSelected(null);
   };
 
-  // Move/resize only apply to USER boxes
   const step = useMemo(() => {
     if (!vw || !vh) return 4;
     return Math.max(1, Math.round(Math.min(vw, vh) * 0.01)); // ~1% of min dimension
@@ -269,7 +342,7 @@ export default function AnalyzeScreen({ route }: any) {
     });
   };
 
-  // Renders
+  // Render helpers
   const DetBox = ({ b, i }: { b: VBox; i: number }) => {
     const isSel = selected?.type === 'ai' && selected.idx === i;
     return (
@@ -291,6 +364,25 @@ export default function AnalyzeScreen({ route }: any) {
       />
     );
   };
+
+  const atStart = currentIndex <= 0;
+  const atEnd = frames.length ? currentIndex >= frames.length - 1 : true;
+
+  const prevFrame = () => seekToIndex(currentIndex - 1);
+  const nextFrame = () => seekToIndex(currentIndex + 1);
+
+  // For meters readout: consider both AI and user
+  const meterReadout = useMemo(() => {
+    if (!vw || !vh) return null;
+    const widths = [
+      ...detectedVideoBoxes.map(m => m.width || 0),
+      ...userVideoBoxes.map(m => m.width || 0),
+    ];
+    const maxWpx = widths.length ? Math.max(...widths) : 0;
+    if (maxWpx <= 0) return null;
+    const meters = maxWpx * metersPerPixel;
+    return meters.toFixed(2) + ' m';
+  }, [detectedVideoBoxes, userVideoBoxes, metersPerPixel, vw, vh]);
 
   return (
     <SafeAreaView style={styles.root}>
@@ -332,6 +424,7 @@ export default function AnalyzeScreen({ route }: any) {
           <Text style={styles.readoutTxt}>{frameReadout}</Text>
           <Text style={styles.readoutTxt}>{timeLabel}</Text>
           {meterReadout && <Text style={styles.readoutSub}>Largest box ≈ {meterReadout}</Text>}
+          <Text style={styles.readoutSub}>Speed: {speedLabel}</Text>
         </View>
 
         <TouchableOpacity
@@ -361,7 +454,7 @@ export default function AnalyzeScreen({ route }: any) {
         <View style={styles.divider} />
 
         {/* Move/resize controls (enabled only for user boxes) */}
-        <View style={styles.inlineRow}>
+        <View style={styles.inlineCol}>
           <TouchableOpacity
             onPress={() => nudge(0, -step)}
             disabled={selected?.type !== 'user'}
@@ -425,6 +518,13 @@ export default function AnalyzeScreen({ route }: any) {
           </TouchableOpacity>
         </View>
 
+        <View style={{ flex: 1 }} />
+
+        {/* Finish */}
+        <TouchableOpacity onPress={finish} style={[styles.smallBtn, styles.finishBtn]}>
+          <Text style={[styles.smallBtnTxt, { fontWeight: '800' }]}>Finish</Text>
+        </TouchableOpacity>
+
         {selected?.type === 'ai' && (
           <Text style={styles.roHint}>AI box selected (move/resize disabled)</Text>
         )}
@@ -438,6 +538,33 @@ export default function AnalyzeScreen({ route }: any) {
           Trim: {startSec.toFixed(2)}s → {endSec.toFixed(2)}s • Scale: {metersPerPixel.toExponential(3)} m/px
         </Text>
       </View>
+
+      {/* Result modal */}
+      {!!result && (
+        <View style={styles.resultOverlay} pointerEvents="box-none">
+          <View style={styles.resultCard}>
+            <Text style={styles.resultTitle}>Max Speed</Text>
+            <Text style={styles.resultValue}>{result.maxKph.toFixed(1)} km/h</Text>
+            {result.atIndex >= 0 && (
+              <Text style={styles.resultSub}>at frame {result.atIndex + 1}</Text>
+            )}
+            <View style={styles.resultRow}>
+              <TouchableOpacity
+                onPress={() => {
+                  if (result.atIndex >= 0) seekToIndex(result.atIndex);
+                  setResult(null);
+                }}
+                style={[styles.resBtn, styles.resPrimary]}
+              >
+                <Text style={styles.resBtnTxt}>Go to fastest</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setResult(null)} style={[styles.resBtn, styles.resGhost]}>
+                <Text style={styles.resBtnTxt}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
       {isLoading && (
         <View style={styles.loadingOverlay}>
@@ -465,7 +592,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     backgroundColor: 'transparent',
   },
-  detBox: { borderColor: '#FF3B30' },     // red (AI detections)
+  detBox: { borderColor: '#FF3B30' },     // red (AI)
   userBox: { borderColor: '#0fd1ff' },    // cyan (user)
   selBox: { borderColor: '#FFD60A', borderWidth: 3 }, // yellow highlight
 
@@ -513,13 +640,13 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 6,
   },
+  finishBtn: { backgroundColor: '#0A84FF' },
   smallBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 12 },
-  selLabel: { color: '#bbb', fontSize: 12, marginLeft: 6 },
   divider: { width: 1, height: 22, backgroundColor: '#222', marginHorizontal: 8 },
   roHint: { color: '#888', fontSize: 12, marginLeft: 6, marginBottom: 6 },
 
   row: { flexDirection: 'row', alignItems: 'center' },
-  inlineRow: { flexDirection: 'column', alignItems: 'center', marginRight: 8 },
+  inlineCol: { flexDirection: 'column', alignItems: 'center', marginRight: 8 },
 
   stepBtn: {
     paddingHorizontal: 10,
@@ -542,6 +669,7 @@ const styles = StyleSheet.create({
   },
   footerTxt: { color: '#bbb', fontSize: 12, textAlign: 'center' },
 
+  // Loading overlay
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
@@ -553,4 +681,32 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
   },
+
+  // Result modal
+  resultOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resultCard: {
+    width: '80%',
+    backgroundColor: '#1C1C1E',
+    padding: 18,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  resultTitle: { color: '#bbb', fontSize: 14, marginBottom: 6 },
+  resultValue: { color: '#fff', fontSize: 40, fontWeight: '800' },
+  resultSub: { color: '#aaa', fontSize: 12, marginTop: 4 },
+  resultRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  resBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  resPrimary: { backgroundColor: '#0A84FF' },
+  resGhost: { backgroundColor: '#2A2A2A' },
+  resBtnTxt: { color: '#fff', fontWeight: '700' },
 });

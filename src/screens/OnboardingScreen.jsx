@@ -367,7 +367,7 @@ const styles = StyleSheet.create({
   getStartedContainer: { alignItems: 'center', paddingTop: 10, paddingBottom: 20 },
   getStartedButton: { backgroundColor: '#007AFF', paddingHorizontal: 40, paddingVertical: 16, borderRadius: 25, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   getStartedText: { color: '#fff', fontWeight: '600', fontSize: 18 },
-  closeButton: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 40, right: 20, zIndex: 10 },
+  closeButton: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 50, right: 20, zIndex: 10 },
   pageIndicator: { position: 'absolute', bottom: 20, width: '100%', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   activeDot: { backgroundColor: '#007AFF' },

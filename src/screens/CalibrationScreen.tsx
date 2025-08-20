@@ -5,8 +5,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import Video, { OnLoadData } from 'react-native-video';
 import Svg, { Line } from 'react-native-svg';
-
-// Import necessary types
 import { Gesture, GestureDetector, GestureUpdateEvent, PanGestureHandlerEventPayload } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
@@ -18,7 +16,6 @@ import Animated, {
 
 const AnimatedLine = Animated.createAnimatedComponent(Line);
 
-// Define navigation types
 type RootStackParamList = {
   Calibration: {
     sourceUri: string;
@@ -42,20 +39,19 @@ export default function CalibrationScreen() {
   const route = useRoute<CalibRoute>();
   const { sourceUri } = route.params;
 
-  // --- Restored State ---
   const [referenceLength, setReferenceLength] = useState('3.87');
   const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
-  const videoW = useRef(0); // To store video's original width
-  const videoH = useRef(0); // To store video's original height
+  const videoW = useRef(0);
+  const videoH = useRef(0);
 
-  // --- Handle 1 Position & State ---
+  // Handle 1 Position & State
   const isDragging1 = useSharedValue(false);
   const positionX1 = useSharedValue(0);
   const positionY1 = useSharedValue(0);
   const offsetX1 = useSharedValue(0);
   const offsetY1 = useSharedValue(0);
 
-  // --- Handle 2 Position & State ---
+  // Handle 2 Position & State
   const isDragging2 = useSharedValue(false);
   const positionX2 = useSharedValue(0);
   const positionY2 = useSharedValue(0);
@@ -73,7 +69,6 @@ export default function CalibrationScreen() {
     }
   };
 
-  // --- Restored onVideoLoad function ---
   const onVideoLoad = (meta: OnLoadData) => {
     videoW.current = meta.naturalSize.width;
     videoH.current = meta.naturalSize.height;
@@ -137,8 +132,7 @@ export default function CalibrationScreen() {
     };
   });
 
-  // --- Restored Calculation Logic ---
-  const onStart = () => {
+  const onAnalyze = () => {
     const realLength = parseFloat(referenceLength);
     if (!Number.isFinite(realLength) || realLength <= 0) {
       Alert.alert('Invalid Input', 'Please enter a valid reference length in meters.');
@@ -151,13 +145,13 @@ export default function CalibrationScreen() {
       return;
     }
 
-    // distance between the two draggable points (in container coords)
+    // Distance between the two draggable points (in container coords)
     const dx = (positionX2.value + offsetX2.value) - (positionX1.value + offsetX1.value);
     const dy = (positionY2.value + offsetY2.value) - (positionY1.value + offsetY1.value);
     const pointDistance = Math.sqrt(dx * dx + dy * dy);
 
-    // container shows the video with `contain` → uniform scale, translation doesn’t affect distance
-    const scaleRatio = Math.min(boxW / videoW.current, boxH / videoH.current); // pixels_on_screen = pixels_in_video * scaleRatio
+    // Container shows the video with `contain` → uniform scale
+    const scaleRatio = Math.min(boxW / videoW.current, boxH / videoH.current);
     const pixelDistance = pointDistance / scaleRatio;
 
     if (!Number.isFinite(pixelDistance) || pixelDistance <= 0) {
@@ -167,7 +161,6 @@ export default function CalibrationScreen() {
 
     const metersPerPixel = realLength / pixelDistance;
 
-    // ✅ Go to the analyzer screen with everything it needs to run inference + draw boxes
     // @ts-ignore
     navigation.navigate('Analyze', {
       sourceUri,
@@ -177,14 +170,17 @@ export default function CalibrationScreen() {
     });
   };
 
-
   return (
     <SafeAreaView style={styles.root}>
-      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}><Text style={styles.link}>Cancel</Text></TouchableOpacity>
         <Text style={styles.title}>Calibration</Text>
-        <View style={{ width: 60 }} />
+        <TouchableOpacity 
+          onPress={onAnalyze} 
+          style={styles.analyzeButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.analyzeText}>Analyze</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.container}>
@@ -202,8 +198,8 @@ export default function CalibrationScreen() {
                 <AnimatedLine
                   animatedProps={animatedLineProps}
                   stroke="cyan"
-                  strokeWidth="2"
-                  strokeDasharray="6"
+                  strokeWidth="3"
+                  strokeDasharray="8,4"
                 />
               </Svg>
               <GestureDetector gesture={panGesture1}>
@@ -217,18 +213,12 @@ export default function CalibrationScreen() {
         </View>
       </View>
       
-      {/* --- MODIFIED UI Panel --- */}
-      {/* 👇 This is now the main button */}
-      <TouchableOpacity
-        style={styles.panel}
-        onPress={onStart}
-        activeOpacity={1} // Prevents the panel from flashing
-      >
+      <View style={styles.panel}>
         <View style={styles.instructionRow}>
-          <Text style={styles.instructionIcon}>☝️</Text>
-          <Text style={styles.instructionText}>Drag the markers to align with a known distance.</Text>
+          <Text style={styles.instructionIcon}>📏</Text>
+          <Text style={styles.instructionText}>Drag markers to align with a known distance</Text>
         </View>
-        <View style={styles.divider} />
+        
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Reference Length</Text>
           <View style={styles.inputRight}>
@@ -242,32 +232,52 @@ export default function CalibrationScreen() {
             <Text style={styles.unit}>meters</Text>
           </View>
         </View>
-        
-        {/* 👇 This is now a non-interactive dummy button */}
-        <View style={styles.cta}>
-          <Text style={styles.ctaLabel}>Start</Text>
-        </View>
-      </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
 
-// --- Restored Styles ---
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#111' },
+  root: { 
+    flex: 1, 
+    backgroundColor: '#000' 
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    height: 50,
+    paddingVertical: 12,
+    backgroundColor: '#000',
+    zIndex: 10,
+    elevation: 10,
   },
-  title: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-  link: { color: '#0A84FF', fontSize: 16, width: 60 },
-  container: { flex: 1, padding: 16, paddingBottom: 8 },
+  title: { 
+    color: '#fff', 
+    fontSize: 20, 
+    fontWeight: 'bold',
+    flex: 1,
+    textAlign: 'center'
+  },
+  analyzeButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  analyzeText: { 
+    color: '#fff', 
+    fontSize: 16, 
+    fontWeight: '600' 
+  },
+  container: { 
+    flex: 1, 
+    padding: 16, 
+    paddingBottom: 8 
+  },
   mediaWrap: {
     flex: 1,
-    backgroundColor: 'black',
+    backgroundColor: '#111',
     borderRadius: 12,
     overflow: 'hidden',
   },
@@ -276,34 +286,65 @@ const styles = StyleSheet.create({
     width: HANDLE_DIAMETER,
     height: HANDLE_DIAMETER,
     borderRadius: HANDLE_DIAMETER / 2,
-    backgroundColor: 'rgba(255, 0, 0, 0.7)',
+    backgroundColor: 'rgba(255, 0, 0, 0.8)',
     borderColor: 'white',
-    borderWidth: 2,
+    borderWidth: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 8,
   },
   panel: {
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 24,
-    backgroundColor: '#1C1C1E',
+    paddingVertical: 20,
+    backgroundColor: 'rgba(28, 28, 30, 0.95)',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
   },
-  instructionRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  instructionIcon: { fontSize: 18 },
-  instructionText: { color: 'rgba(255,255,255,0.8)', fontSize: 14, flex: 1 },
-  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginVertical: 12 },
-  inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  inputLabel: { color: 'white', fontSize: 16, fontWeight: '500' },
-  inputRight: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto' },
+  instructionRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 12,
+    marginBottom: 20
+  },
+  instructionIcon: { 
+    fontSize: 20 
+  },
+  instructionText: { 
+    color: 'rgba(255,255,255,0.8)', 
+    fontSize: 16, 
+    flex: 1 
+  },
+  inputRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between'
+  },
+  inputLabel: { 
+    color: 'white', 
+    fontSize: 16, 
+    fontWeight: '500' 
+  },
+  inputRight: { 
+    flexDirection: 'row', 
+    alignItems: 'center'
+  },
   textInput: {
     color: 'white',
     fontSize: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 8,
-    width: 80,
-    textAlign: 'right',
+    width: 100,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
-  unit: { color: 'rgba(255,255,255,0.7)', marginLeft: 8 },
-  cta: { backgroundColor: '#0A84FF', borderRadius: 12, alignItems: 'center', paddingVertical: 14 },
-  ctaLabel: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+  unit: { 
+    color: 'rgba(255,255,255,0.7)', 
+    marginLeft: 12,
+    fontSize: 16
+  },
 });

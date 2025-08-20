@@ -25,7 +25,7 @@ const TRIMMER_PADDING = 30;
 const TRACK_WIDTH = SCREEN_WIDTH - 2 * TRIMMER_PADDING;
 const HANDLE_WIDTH = 20;
 const SEEK_THROTTLE_MS = 80;
-const LOOP_EPS = 0.05; // slightly larger epsilon for safety
+const LOOP_EPS = 0.05;
 
 const wClamp = (v: number, min: number, max: number) => {
   'worklet';
@@ -73,9 +73,6 @@ const TrimScreen: React.FC = () => {
   const [startTime, setStartTime] = React.useState('00:00.00');
   const [endTime, setEndTime] = React.useState(formatTime(videoDuration));
   const [nowSec, setNowSec] = React.useState(0);
-  const [isPreview, setIsPreview] = React.useState(false);
-
-  // CHANGED: start unpaused so we autoplay & loop during editing
   const [paused, setPaused] = React.useState(false);
 
   React.useEffect(() => {
@@ -103,7 +100,6 @@ const TrimScreen: React.FC = () => {
     setEndTime(formatTime(end));
   }, []);
 
-  // Handy helper to ensure playback is running when user interacts
   const resumePlayback = React.useCallback(() => setPaused(false), []);
 
   useAnimatedReaction(
@@ -120,7 +116,6 @@ const TrimScreen: React.FC = () => {
   const leftPanGesture = Gesture.Pan()
     .onStart(() => {
       startX.value = leftHandleX.value;
-      // CHANGED: ensure playback so we can see the loop live while trimming
       runOnJS(resumePlayback)();
     })
     .onUpdate((event) => {
@@ -137,7 +132,6 @@ const TrimScreen: React.FC = () => {
   const rightPanGesture = Gesture.Pan()
     .onStart(() => {
       startX.value = rightHandleX.value;
-      // CHANGED: ensure playback so we can see the loop live while trimming
       runOnJS(resumePlayback)();
     })
     .onUpdate((event) => {
@@ -162,7 +156,6 @@ const TrimScreen: React.FC = () => {
     right: TRACK_WIDTH - rightHandleX.value - HANDLE_WIDTH / 2,
   }));
 
-  // CHANGED: Loop regardless of preview mode; loop only while playing
   const onVideoProgress = React.useCallback(
     (prog: OnProgressData) => {
       const t = prog.currentTime ?? 0;
@@ -180,44 +173,22 @@ const TrimScreen: React.FC = () => {
     [paused, startSec, endSec, videoDuration]
   );
 
-  const onPreview = React.useCallback(() => {
-    if (!(endSec > startSec)) return;
-    setIsPreview(true);
-    setPaused(true);
-    requestAnimationFrame(() => videoRef.current?.seek(startSec));
-  }, [startSec, endSec]);
-
   const onCalibrate = React.useCallback(() => {
     // @ts-ignore
     navigation.navigate('Calibration', { sourceUri, duration: videoDuration, startSec, endSec });
   }, [navigation, sourceUri, videoDuration, startSec, endSec]);
 
-  const exitPreview = React.useCallback(() => {
-    setIsPreview(false);
-    // CHANGED: keep playing so edit mode live-loops the trimmed range
-    setPaused(false);
-  }, []);
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        {isPreview ? (
-          <TouchableOpacity onPress={onCalibrate} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={styles.doneButton}>Calibrate</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 88 }} />
-        )}
         <Text style={styles.title}>Trim Video</Text>
-        {isPreview ? (
-          <TouchableOpacity onPress={exitPreview}>
-            <Text style={styles.doneButton}>Edit</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity onPress={onPreview} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={styles.doneButton}>Done</Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity 
+          onPress={onCalibrate} 
+          style={styles.calibrateButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.calibrateText}>Calibrate</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.videoContainer}>
@@ -226,13 +197,12 @@ const TrimScreen: React.FC = () => {
           key={sourceUri}
           source={{ uri: sourceUri }}
           style={styles.video}
-          controls={!isPreview}
+          controls={false}
           paused={paused}
           resizeMode="contain"
           onLoad={onVideoLoad}
           progressUpdateInterval={33}
           onProgress={onVideoProgress}
-          // CHANGED: always jump back to current loop start on natural end
           onEnd={() => {
             const loopStart = Number.isFinite(startSec) ? startSec : 0;
             videoRef.current?.seek(loopStart);
@@ -246,46 +216,39 @@ const TrimScreen: React.FC = () => {
         </View>
       </View>
 
-      {!isPreview && (
-        <View style={styles.trimmerContainer}>
-          <View style={styles.timeLabelContainer}>
-            <Text style={styles.timeLabel}>{startTime}</Text>
-            <Text style={styles.timeLabel}>{endTime}</Text>
-          </View>
-          <View style={styles.trackContainer}>
-            <Animated.View style={[styles.selectedTrack, selectedTrackStyle]} />
-            <View style={styles.track} />
-            <GestureDetector gesture={leftPanGesture}>
-              <Animated.View style={[styles.handle, leftHandleStyle]}>
-                <View style={styles.handleIndicator} />
-              </Animated.View>
-            </GestureDetector>
-            <GestureDetector gesture={rightPanGesture}>
-              <Animated.View style={[styles.handle, rightHandleStyle]}>
-                <View style={styles.handleIndicator} />
-              </Animated.View>
-            </GestureDetector>
-          </View>
+      <View style={styles.trimmerContainer}>
+        <View style={styles.timeLabelContainer}>
+          <Text style={styles.timeLabel}>{startTime}</Text>
+          <Text style={styles.timeLabel}>{endTime}</Text>
         </View>
-      )}
-
-      {isPreview && (
-        <View style={[styles.trimmerContainer, { paddingTop: 12 }]}>
-          <View style={styles.timeLabelContainer}>
-            <Text style={styles.timeLabel}>Start: {formatTime(startSec)}</Text>
-            <Text style={styles.timeLabel}>End: {formatTime(endSec)}</Text>
-          </View>
-          <Text style={[styles.timeLabel, { textAlign: 'center', opacity: 0.75 }]}>
-            Previewing {formatTime(startSec)}–{formatTime(endSec)}
-          </Text>
+        <View style={styles.trackContainer}>
+          <Animated.View style={[styles.selectedTrack, selectedTrackStyle]} />
+          <View style={styles.track} />
+          <GestureDetector gesture={leftPanGesture}>
+            <Animated.View style={[styles.handle, leftHandleStyle]}>
+              <View style={styles.handleIndicator} />
+            </Animated.View>
+          </GestureDetector>
+          <GestureDetector gesture={rightPanGesture}>
+            <Animated.View style={[styles.handle, rightHandleStyle]}>
+              <View style={styles.handleIndicator} />
+            </Animated.View>
+          </GestureDetector>
         </View>
-      )}
+        <Text style={styles.instructionText}>
+          Drag the handles to trim your video
+        </Text>
+      </View>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000', alignItems: 'center' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#000', 
+    alignItems: 'center' 
+  },
   header: {
     width: '100%',
     flexDirection: 'row',
@@ -297,10 +260,33 @@ const styles = StyleSheet.create({
     zIndex: 10,
     elevation: 10,
   },
-  title: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  doneButton: { color: '#007AFF', fontSize: 16, fontWeight: '600' },
-  videoContainer: { flex: 1, width: '100%', justifyContent: 'center' },
-  video: { width: '100%', height: '100%' },
+  title: { 
+    color: '#fff', 
+    fontSize: 20, 
+    fontWeight: 'bold',
+    flex: 1,
+    textAlign: 'center'
+  },
+  calibrateButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  calibrateText: { 
+    color: '#fff', 
+    fontSize: 16, 
+    fontWeight: '600' 
+  },
+  videoContainer: { 
+    flex: 1, 
+    width: '100%', 
+    justifyContent: 'center' 
+  },
+  video: { 
+    width: '100%', 
+    height: '100%' 
+  },
   clockPill: {
     position: 'absolute',
     right: 12,
@@ -310,16 +296,69 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
   },
-  clockText: { color: '#fff', fontVariant: ['tabular-nums'] },
-  trimmerContainer: { width: '100%', padding: TRIMMER_PADDING, paddingVertical: 40 },
-  timeLabelContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  timeLabel: { color: '#fff', fontSize: 14 },
-  trackContainer: { height: 40, width: TRACK_WIDTH, justifyContent: 'center', alignSelf: 'center' },
-  track: { height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', borderRadius: 2 },
-  selectedTrack: { height: 6, backgroundColor: '#007AFF', borderRadius: 3, position: 'absolute' },
-  handle: { width: HANDLE_WIDTH, height: 40, position: 'absolute', justifyContent: 'center', alignItems: 'center' },
+  clockText: { 
+    color: '#fff', 
+    fontVariant: ['tabular-nums'],
+    fontSize: 12
+  },
+  trimmerContainer: { 
+    width: '100%', 
+    padding: TRIMMER_PADDING, 
+    paddingVertical: 40 
+  },
+  timeLabelContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: 10 
+  },
+  timeLabel: { 
+    color: '#fff', 
+    fontSize: 14,
+    fontWeight: '500'
+  },
+  trackContainer: { 
+    height: 40, 
+    width: TRACK_WIDTH, 
+    justifyContent: 'center', 
+    alignSelf: 'center',
+    marginBottom: 12
+  },
+  track: { 
+    height: 4, 
+    backgroundColor: 'rgba(255, 255, 255, 0.3)', 
+    borderRadius: 2 
+  },
+  selectedTrack: { 
+    height: 6, 
+    backgroundColor: '#007AFF', 
+    borderRadius: 3, 
+    position: 'absolute' 
+  },
+  handle: { 
+    width: HANDLE_WIDTH, 
+    height: 40, 
+    position: 'absolute', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
   handleIndicator: {
-    width: 6, height: 24, backgroundColor: '#fff', borderRadius: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.5)',
+    width: 6, 
+    height: 24, 
+    backgroundColor: '#fff', 
+    borderRadius: 3, 
+    borderWidth: 1, 
+    borderColor: 'rgba(0,0,0,0.5)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  instructionText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 8,
   },
 });
 
