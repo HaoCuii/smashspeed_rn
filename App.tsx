@@ -15,6 +15,7 @@ import CalibrationScreen from './src/screens/CalibrationScreen';
 import AnalyzeScreen from './src/screens/AnalyzeScreen'; // ← NEW
 import ResultsScreen from './src/screens/ResultsScreen';
 import AccountScreen from './src/screens/AccountScreen';
+import SpeedResultScreen from './src/screens/SpeedResultScreen';
 
 // ---------- Route types ----------
 export type RootStackParamList = {
@@ -84,6 +85,11 @@ const RootNavigator = () => {
       <Stack.Screen
         name="Analyze"
         component={AnalyzeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="SpeedResult"
+        component={SpeedResultScreen}
         options={{ headerShown: false }}
       />
     </Stack.Navigator>

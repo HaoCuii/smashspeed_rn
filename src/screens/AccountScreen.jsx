@@ -46,70 +46,21 @@ const AccountView = () => {
   const [user, setUser] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const [infoMessage, setInfoMessage] = useState(null);
-  const [userSettings, setUserSettings] = useState({
-    appearanceMode: 'system',
-    profilePicture: null,
-    displayName: '',
-    notificationsEnabled: true,
-  });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth(), (user) => {
       if (user) {
         setAuthState('signedIn');
         setUser(user);
-        loadUserSettings(user.uid);
         saveUserToFirestore(user);
       } else {
         setAuthState('signedOut');
         setUser(null);
-        setUserSettings({
-          appearanceMode: 'system',
-          profilePicture: null,
-          displayName: '',
-          notificationsEnabled: true,
-        });
       }
     });
 
     return unsubscribe;
   }, []);
-
-  const loadUserSettings = async (userId) => {
-    try {
-      const userSettingsDoc = await firestore()
-        .collection('users')
-        .doc(userId)
-        .collection('userSettings')
-        .doc('preferences')
-        .get();
-      
-      if (userSettingsDoc.exists) {
-        const settings = userSettingsDoc.data();
-        setUserSettings(prevSettings => ({ ...prevSettings, ...settings }));
-      } else {
-        // Create default settings document
-        await saveUserSettings(userId, userSettings);
-      }
-    } catch (error) {
-      console.error('Error loading user settings:', error);
-    }
-  };
-
-  const saveUserSettings = async (userId, settings) => {
-    try {
-      await firestore()
-        .collection('users')
-        .doc(userId)
-        .collection('userSettings')
-        .doc('preferences')
-        .set(settings, { merge: true });
-      
-      setUserSettings(prevSettings => ({ ...prevSettings, ...settings }));
-    } catch (error) {
-      console.error('Error saving user settings:', error);
-    }
-  };
 
   const saveUserToFirestore = async (user) => {
     try {
@@ -225,7 +176,6 @@ const AccountView = () => {
   const contextValue = {
     authState,
     user,
-    userSettings,
     errorMessage,
     infoMessage,
     signOut,
@@ -236,7 +186,6 @@ const AccountView = () => {
     signUp,
     sendPasswordReset,
     updatePassword,
-    saveUserSettings,
     setErrorMessage,
     setInfoMessage,
   };
@@ -262,11 +211,6 @@ const AccountView = () => {
             <Text style={styles.headerTitle}>
               {authState === 'signedIn' ? 'My Account' : 'Welcome'}
             </Text>
-            {authState === 'signedIn' && (
-              <TouchableOpacity style={styles.menuButton}>
-                <Icon name="settings" size={24} color="#666" />
-              </TouchableOpacity>
-            )}
           </View>
         </SafeAreaView>
 
@@ -291,9 +235,8 @@ const AccountView = () => {
 
 // Logged In View Component
 const LoggedInView = ({ user }) => {
-  const { signOut, deleteAccount, userSettings, saveUserSettings } = useContext(AuthContext);
+  const { signOut, deleteAccount } = useContext(AuthContext);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const memberSince = user.metadata?.creationTime 
     ? new Date(user.metadata.creationTime).toLocaleDateString('en-US', { 
@@ -323,11 +266,6 @@ const LoggedInView = ({ user }) => {
     );
   };
 
-  const updateAppearanceMode = (mode) => {
-    const newSettings = { ...userSettings, appearanceMode: mode };
-    saveUserSettings(user.uid, newSettings);
-  };
-
   return (
     <ScrollView 
       style={styles.scrollView} 
@@ -338,68 +276,13 @@ const LoggedInView = ({ user }) => {
       <View style={styles.glassPanel}>
         <View style={styles.profileHeader}>
           <View style={styles.profilePictureContainer}>
-            {userSettings.profilePicture ? (
-              <Image 
-                source={{ uri: userSettings.profilePicture }} 
-                style={styles.profilePicture}
-              />
-            ) : (
-              <Icon name="account-circle" size={60} color="#4CAF50" />
-            )}
+            <Icon name="account-circle" size={60} color="#007AFF" />
           </View>
           <View style={styles.profileInfo}>
             <Text style={styles.emailText}>{user.email || 'No Email'}</Text>
             <Text style={styles.memberSinceText}>Member since {memberSince}</Text>
           </View>
-          <TouchableOpacity 
-            style={styles.editProfileButton}
-            onPress={() => {
-              // Handle profile edit - could open image picker for profile picture
-              Alert.alert('Edit Profile', 'Profile editing coming soon!');
-            }}
-          >
-            <Icon name="edit" size={20} color="#007AFF" />
-          </TouchableOpacity>
         </View>
-      </View>
-
-      {/* App Settings */}
-      <View style={styles.glassPanel}>
-        <Text style={styles.sectionTitle}>Settings</Text>
-        
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Appearance</Text>
-          <View style={styles.segmentedControl}>
-            {['System', 'Light', 'Dark'].map((mode) => (
-              <TouchableOpacity
-                key={mode}
-                style={[
-                  styles.segmentButton,
-                  userSettings.appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentButtonActive
-                ]}
-                onPress={() => updateAppearanceMode(mode.toLowerCase())}
-              >
-                <Text style={[
-                  styles.segmentText,
-                  userSettings.appearanceMode.toLowerCase() === mode.toLowerCase() && styles.segmentTextActive
-                ]}>
-                  {mode}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.divider} />
-        
-        <TouchableOpacity
-          style={styles.settingButton}
-          onPress={() => setShowOnboarding(true)}
-        >
-          <Icon name="help" size={20} color="#007AFF" />
-          <Text style={styles.settingButtonText}>View Tutorial</Text>
-          <Icon name="chevron-right" size={20} color="#C7C7CC" />
-        </TouchableOpacity>
       </View>
 
       {/* Community & Support */}
@@ -873,7 +756,7 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 50,
@@ -883,11 +766,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#000',
-  },
-  menuButton: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
   content: {
     flex: 1,
@@ -926,18 +804,8 @@ const styles = StyleSheet.create({
   profilePictureContainer: {
     marginRight: 15,
   },
-  profilePicture: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-  },
   profileInfo: {
     flex: 1,
-  },
-  editProfileButton: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
   },
   emailText: {
     fontSize: 18,
@@ -954,38 +822,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#000',
     marginBottom: 15,
-  },
-  settingRow: {
-    marginBottom: 15,
-  },
-  settingLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#000',
-    marginBottom: 10,
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#E5E5EA',
-    borderRadius: 8,
-    padding: 2,
-  },
-  segmentButton: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 6,
-  },
-  segmentButtonActive: {
-    backgroundColor: '#007AFF',
-  },
-  segmentText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#666',
-  },
-  segmentTextActive: {
-    color: 'white',
   },
   settingButton: {
     flexDirection: 'row',
