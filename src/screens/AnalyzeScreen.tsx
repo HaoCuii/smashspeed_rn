@@ -274,8 +274,6 @@ export default function AnalyzeScreen({ route, navigation }: any) {
         maxKph: 0,
         angle: 0,
         videoUri: sourceUri,
-        startSec,
-        endSec,
       });
       return;
     }
@@ -284,8 +282,8 @@ export default function AnalyzeScreen({ route, navigation }: any) {
       maxKph: maxSpeedData.maxKph,
       angle: maxSpeedData.angle,
       videoUri: sourceUri,
-      startSec,
-      endSec,
+              startSec,
+        endSec,
     });
   };
 

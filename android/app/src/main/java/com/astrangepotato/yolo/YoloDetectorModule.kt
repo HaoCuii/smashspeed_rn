@@ -19,6 +19,16 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
 
   private var env: OrtEnvironment? = null
   private var session: OrtSession? = null
+  private var inputName: String? = null
+
+  // Reusable buffers / objects to avoid per-frame allocations
+  private val MODEL_W = 640
+  private val MODEL_H = 640
+  private var dstBitmapCache: Bitmap? = null
+  private var pixelsCache: IntArray? = null
+  private var floatCache: FloatArray? = null
+  private val sharedMatrix = Matrix()
+  private val sharedPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
   override fun getName() = "YoloDetector"
 
@@ -29,7 +39,11 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
       if (session == null) {
         val modelBytes = reactContext.assets.open("model.onnx").readBytes()
         val opts = OrtSession.SessionOptions()
+        // You can tweak opts here (threads, optimization level) if API available.
         session = env!!.createSession(modelBytes, opts)
+
+        // cache input name once
+        inputName = session!!.inputNames.iterator().next()
 
         session?.let { s ->
           for ((name, v) in s.inputInfo) {
@@ -60,6 +74,7 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
           retriever.setDataSource(path)
         }
 
+        // determine target FPS (same logic you had)
         val targetFps = if (fps > 0) {
           fps
         } else {
@@ -73,6 +88,33 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
             else -> 30
           }
         }
+
+        // compute letterbox params once if video metadata available (width/height usually present)
+        val videoW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+        val videoH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+        var precomputedLeft = 0f
+        var precomputedTop = 0f
+        var precomputedScale = 1f
+        if (videoW != null && videoH != null && videoW > 0 && videoH > 0) {
+          val sW = videoW.toFloat()
+          val sH = videoH.toFloat()
+          precomputedScale = minOf(MODEL_W / sW, MODEL_H / sH)
+          val dW = (sW * precomputedScale).toInt()
+          val dH = (sH * precomputedScale).toInt()
+          precomputedLeft = (MODEL_W - dW) / 2f
+          precomputedTop  = (MODEL_H - dH) / 2f
+          sharedMatrix.setScale(precomputedScale, precomputedScale)
+          sharedMatrix.postTranslate(precomputedLeft, precomputedTop)
+        } else {
+          // will compute per-frame fallback in preprocess
+          precomputedScale = -1f
+        }
+
+        // allocate/reuse caches once
+        val plane = MODEL_W * MODEL_H
+        if (dstBitmapCache == null) dstBitmapCache = Bitmap.createBitmap(MODEL_W, MODEL_H, Bitmap.Config.ARGB_8888)
+        if (pixelsCache == null) pixelsCache = IntArray(plane)
+        if (floatCache == null) floatCache = FloatArray(3 * plane)
 
         val startUs = (startSec * 1_000_000).toLong()
         val endUs = (endSec * 1_000_000).toLong()
@@ -89,11 +131,24 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
         for (i in 0 until numFrames) {
           val tUs = startUs + (i * stepUs)
 
-          // Use the closest frame rather than previous keyframe to avoid "frozen" boxes
           val bmp = getFrameClosest(retriever, tUs)
           if (bmp != null) {
-            val chw = preprocessLetterbox640(bmp)         // 640x640 letterbox
-            val dets = runOrtDecodeNms(chw)               // decode + NMS
+            // If we couldn't precompute scale/translate, compute from this frame once and set sharedMatrix
+            if (precomputedScale <= 0f) {
+              val sW = bmp.width.toFloat()
+              val sH = bmp.height.toFloat()
+              val scale = minOf(MODEL_W / sW, MODEL_H / sH)
+              val dW = (sW * scale).toInt()
+              val dH = (sH * scale).toInt()
+              val left = (MODEL_W - dW) / 2f
+              val top  = (MODEL_H - dH) / 2f
+              sharedMatrix.setScale(scale, scale)
+              sharedMatrix.postTranslate(left, top)
+            }
+
+            // Fill cached floatCache by reusing the shared dstBitmapCache and pixelsCache
+            val chw = preprocessLetterbox640_reuse(bmp, dstBitmapCache!!, pixelsCache!!, floatCache!!, sharedMatrix, sharedPaint)
+            val dets = runOrtDecodeNms(chw)               // decode + NMS (uses cached inputName)
             val item = Arguments.createMap().apply {
               putDouble("t", tUs / 1000.0) // ms
               putArray("boxes", detsToWritable(dets))
@@ -139,86 +194,66 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
       .emit("onDetectionError", map)
   }
 
-  /** Letterbox to 640x640, CHW, RGB, [0..1] */
-  private fun preprocessLetterbox640(src: Bitmap): FloatArray {
-    val dst = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888)
+  /** Reusable letterbox -> fills provided arrays, returns same out array */
+  private fun preprocessLetterbox640_reuse(
+    src: Bitmap,
+    dst: Bitmap,
+    pixels: IntArray,
+    out: FloatArray,
+    mtx: Matrix,
+    paint: Paint
+  ): FloatArray {
+    // dst already 640x640, mtx is precomputed or set per-frame
     val canvas = Canvas(dst)
-    // Match Ultralytics default padding (114,114,114)
     canvas.drawColor(Color.rgb(114, 114, 114))
+    canvas.drawBitmap(src, mtx, paint)
 
-    val sW = src.width.toFloat()
-    val sH = src.height.toFloat()
-    val scale = minOf(640f / sW, 640f / sH)          // preserves aspect (letterbox)
-    val dW = (sW * scale).toInt()
-    val dH = (sH * scale).toInt()
-    val left = (640 - dW) / 2f
-    val top  = (640 - dH) / 2f
+    // extract pixels into preallocated array
+    dst.getPixels(pixels, 0, MODEL_W, 0, 0, MODEL_W, MODEL_H)
 
-    val m = Matrix().apply { setScale(scale, scale); postTranslate(left, top) }
-    canvas.drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG))
-
-    val W = 640
-    val H = 640
-    val plane = W * H
-    val pixels = IntArray(plane)
-    dst.getPixels(pixels, 0, W, 0, 0, W, H)
-
-    val out = FloatArray(3 * plane)
+    val plane = MODEL_W * MODEL_H
     var r = 0; var g = plane; var b = 2 * plane; var p = 0
-    for (y in 0 until H) {
-      for (x in 0 until W) {
+    for (y in 0 until MODEL_H) {
+      for (x in 0 until MODEL_W) {
         val px = pixels[p++]
         out[r++] = ((px shr 16) and 0xFF) / 255f
         out[g++] = ((px shr 8) and 0xFF) / 255f
         out[b++] = ( px and 0xFF) / 255f
       }
     }
-    dst.recycle()
     return out
   }
 
-  /**
-   * Robust postprocess:
-   *  - Accepts YOLO head shaped [1, N, 5+C] or [1, 5+C, N]
-   *  - confidence = obj * max(classProbs)  (works if C==1 or C>1)
-   *  - Returns TLWH in model space (letterboxed 640x640)
-   */
+  /* runOrtDecodeNms unchanged except it now uses cached inputName field */
   private fun runOrtDecodeNms(chw: FloatArray): List<WritableMap> {
     val envLocal = env ?: throw IllegalStateException("ORT not initialized")
     val sess = session ?: throw IllegalStateException("Session not created")
-    val inputName = sess.inputNames.iterator().next()
+    val input = inputName ?: sess.inputNames.iterator().next()
 
     OnnxTensor.createTensor(envLocal, FloatBuffer.wrap(chw), longArrayOf(1, 3, 640, 640)).use { tensor ->
-      sess.run(mapOf(inputName to tensor)).use { result ->
+      sess.run(mapOf(input to tensor)).use { result ->
         val raw = result[0].value
 
-        // ---- Normalize to rows: Array<FloatArray> with length K = 5 + C
+        @Suppress("UNCHECKED_CAST")
         val rows: Array<FloatArray> = when (raw) {
           is Array<*> -> {
-            // Most exports: Array<Array<FloatArray>> with shape [1, A, B] (A,B = N,K or K,N)
             val a = raw.getOrNull(0)
             when (a) {
               is Array<*> -> {
-                val arr = a as Array<FloatArray> // shape could be [N, K] OR [K, N]
+                val arr = a as Array<FloatArray>
                 if (arr.isNotEmpty()) {
                   val dim0 = arr.size
                   val dim1 = arr[0].size
-                  // If dim0 is small (e.g., 84) and dim1 is huge (e.g., 8400), we have [K, N] -> transpose to [N, K]
                   if (dim0 < dim1 && dim0 <= 256) {
                     val K = dim0
                     val N = dim1
                     Array(N) { i -> FloatArray(K) { k -> arr[k][i] } }
                   } else {
-                    arr // already [N, K]
+                    arr
                   }
-                } else {
-                  emptyArray()
-                }
+                } else emptyArray()
               }
-              is FloatArray -> {
-                // Rare: [1, K] – treat as one "row"
-                arrayOf(a)
-              }
+              is FloatArray -> arrayOf(a)
               else -> error("Unexpected ONNX output element type: ${a?.javaClass}")
             }
           }
@@ -226,17 +261,14 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
           else -> error("Unexpected ONNX output type: ${raw?.javaClass}")
         }
 
-        // ---- Decode rows
-        val confThresh = 0.15f      // tweakable
+        val confThresh = 0.15f
         val iouThresh = 0.45f
-        val pre = mutableListOf<FloatArray>() // [cx,cy,w,h,conf,classId]
-
+        val pre = mutableListOf<FloatArray>()
         for (r in rows) {
           if (r.size < 6) continue
           val obj = r[4]
           var bestProb = 0f
           var bestClass = 0
-          // classes start at 5; works for C==1 too
           for (k in 5 until r.size) {
             val p = r[k]
             if (p > bestProb) { bestProb = p; bestClass = k - 5 }
@@ -248,7 +280,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
         }
         pre.sortByDescending { it[4] }
 
-        // ---- NMS in center format
         val active = BooleanArray(pre.size) { true }
         fun iou(a: FloatArray, b: FloatArray): Float {
           val ax1 = a[0]-a[2]/2; val ay1 = a[1]-a[3]/2; val ax2 = a[0]+a[2]/2; val ay2 = a[1]+a[3]/2
@@ -266,7 +297,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext)
           if (!active[i]) continue
           val k = pre[i]
           val map = Arguments.createMap().apply {
-            // convert cx,cy,w,h -> tlwh in MODEL space
             putDouble("x", (k[0] - k[2]/2).toDouble())
             putDouble("y", (k[1] - k[3]/2).toDouble())
             putDouble("width",  k[2].toDouble())
