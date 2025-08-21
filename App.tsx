@@ -12,7 +12,7 @@ import DetectScreen from './src/screens/DetectScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import TrimScreen from './src/screens/TrimScreen';
 import CalibrationScreen from './src/screens/CalibrationScreen';
-import AnalyzeScreen from './src/screens/AnalyzeScreen'; // ← NEW
+import AnalyzeScreen from './src/screens/AnalyzeScreen';
 import ResultsScreen from './src/screens/ResultsScreen';
 import AccountScreen from './src/screens/AccountScreen';
 import SpeedResultScreen from './src/screens/SpeedResultScreen';
@@ -22,7 +22,8 @@ export type RootStackParamList = {
   Tabs: undefined;
   Trim: { sourceUri: string; duration: number };
   Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
-  Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number }; // ← NEW
+  Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number };
+  SpeedResult: { maxKph: number; angle: number; videoUri: string; startSec: number; endSec: number };
 };
 
 // --- Navigators ---

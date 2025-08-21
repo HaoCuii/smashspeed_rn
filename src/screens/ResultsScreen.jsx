@@ -20,7 +20,6 @@ import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
 import auth, { onAuthStateChanged } from '@react-native-firebase/auth';
 import storage from '@react-native-firebase/storage';
-// Removed i18n import
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -112,7 +111,7 @@ const HistoryRow = ({ result, onDelete, onVideoPress }) => {
         <View style={styles.historyRightContent}>
           <Text style={styles.historySpeed}>{result.peakSpeedKph.toFixed(1)}</Text>
           <Text style={styles.historySpeedUnit}>km/h</Text>
-          {result.angle && (
+          {result.angle !== undefined && result.angle !== null && (
             <Text style={styles.historyAngle}>{result.angle.toFixed(0)}°</Text>
           )}
         </View>
@@ -425,6 +424,19 @@ const HistoryView = () => {
     setSelectedVideo(null);
   };
 
+  // Helper function to safely format data point text
+  const getDataPointText = () => {
+    if (selectedDataPoint) {
+      const dateStr = selectedDataPoint.date.toLocaleDateString();
+      const speedStr = selectedDataPoint.topSpeed.toFixed(1);
+      return `${dateStr} • ${speedStr} km/h`;
+    }
+    const rangeText = selectedRange.value || 'Week';
+    const resultsCount = filteredResults.length || 0;
+    const pluralText = resultsCount !== 1 ? 's' : '';
+    return `${rangeText} • ${resultsCount} detection${pluralText}`;
+  };
+
   if (authState !== 'signedIn') {
     return (
       <View style={styles.container}>
@@ -465,10 +477,7 @@ const HistoryView = () => {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Your Stats</Text>
           <Text style={styles.headerSubtitle}>
-            {selectedDataPoint 
-              ? `${selectedDataPoint.date.toLocaleDateString()} • ${selectedDataPoint.topSpeed.toFixed(1)} km/h`
-              : `${selectedRange.value} • ${filteredResults.length} detection${filteredResults.length !== 1 ? 's' : ''}`
-            }
+            {getDataPointText()}
           </Text>
         </View>
 
@@ -573,8 +582,15 @@ const HistoryView = () => {
               <Video
                 source={{ uri: selectedVideo.videoURL }}
                 style={styles.videoPlayer}
-                controls={true}
-                resizeMode="contain"
+                resizeMode="cover"   // fills without black bars, use "contain" if you want fit
+                repeat               // seamless loop
+                rate={0.25}           // slow motion (0.5 = half speed, can be 0.25–2.0)
+                ignoreSilentSwitch="obey"
+                muted={false}
+                controls={false}     // ensures native controls are hidden
+                paused={false}       // autoplay
+                playInBackground={false}
+                playWhenInactive={false}
                 onError={(error) => {
                   console.log('Video error:', error);
                   Alert.alert('Error', 'Unable to play video');
@@ -599,7 +615,7 @@ const HistoryView = () => {
                     {new Date(selectedVideo.date.seconds * 1000).toLocaleTimeString()}
                   </Text>
                 </View>
-                {selectedVideo.angle && (
+                {selectedVideo.angle !== undefined && selectedVideo.angle !== null && (
                   <View style={styles.videoInfoRow}>
                     <Text style={styles.videoInfoLabel}>Angle:</Text>
                     <Text style={styles.videoInfoValue}>{selectedVideo.angle.toFixed(1)}°</Text>

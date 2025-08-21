@@ -1,4 +1,3 @@
-// src/screens/TrimScreen.tsx
 import React from 'react';
 import {
   StyleSheet,
@@ -6,6 +5,7 @@ import {
   Text,
   Dimensions,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -15,178 +15,176 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withSpring,
+  useDerivedValue,
   useAnimatedReaction,
   runOnJS,
 } from 'react-native-reanimated';
+import { RootStackParamList } from '../../App';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TRIMMER_PADDING = 30;
 const TRACK_WIDTH = SCREEN_WIDTH - 2 * TRIMMER_PADDING;
 const HANDLE_WIDTH = 20;
-const SEEK_THROTTLE_MS = 80;
-const LOOP_EPS = 0.05;
+const EFFECTIVE_TRACK_WIDTH = TRACK_WIDTH - HANDLE_WIDTH;
+const LOOP_EPSILON = 0.05;
 
-const wClamp = (v: number, min: number, max: number) => {
+const formatTime = (seconds: number) => {
+  const safeSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(
+    remainingSeconds.toFixed(2)
+  ).padStart(5, '0')}`;
+};
+
+const clamp = (value: number, min: number, max: number) => {
   'worklet';
-  return Math.max(min, Math.min(v, max));
+  return Math.max(min, Math.min(value, max));
 };
 
-type RootStackParamList = {
-  Trim: { sourceUri: string; duration: number };
-  Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
-};
 type TrimRoute = RouteProp<RootStackParamList, 'Trim'>;
 type VideoHandle = React.ElementRef<typeof Video>;
 
-const formatTime = (seconds: number) => {
-  const safe = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
-  const mins = Math.floor(safe / 60)
-    .toString()
-    .padStart(2, '0');
-  const secsFloat = safe - Math.floor(safe / 60) * 60;
-  let secsStr = secsFloat.toFixed(2);
-  if (secsFloat < 10) secsStr = `0${secsStr}`;
-  return `${mins}:${secsStr}`;
-};
-
 const TrimScreen: React.FC = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const route = useRoute<TrimRoute>();
-  const { sourceUri = '', duration: durationParam = 0 } = route.params ?? ({} as any);
+  const { sourceUri, duration: initialDuration = 0 } = route.params;
 
   const videoRef = React.useRef<VideoHandle | null>(null);
-  const lastSeekRef = React.useRef(0);
 
-  const [videoDuration, setVideoDuration] = React.useState(
-    Number.isFinite(durationParam) && durationParam > 0 ? durationParam : 0
+  const [videoDuration, setVideoDuration] = React.useState(initialDuration);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [startTimeStr, setStartTimeStr] = React.useState('00:00.00');
+  const [endTimeStr, setEndTimeStr] = React.useState(
+    formatTime(initialDuration)
   );
 
-  // Handles (px)
   const leftHandleX = useSharedValue(0);
-  const rightHandleX = useSharedValue(TRACK_WIDTH - HANDLE_WIDTH);
-  const startX = useSharedValue(0);
+  const rightHandleX = useSharedValue(EFFECTIVE_TRACK_WIDTH);
+  const dragContextX = useSharedValue(0);
 
-  // Selected range and playback state
-  const [startSec, setStartSec] = React.useState(0);
-  const [endSec, setEndSec] = React.useState(videoDuration);
-  const [startTime, setStartTime] = React.useState('00:00.00');
-  const [endTime, setEndTime] = React.useState(formatTime(videoDuration));
-  const [nowSec, setNowSec] = React.useState(0);
-  const [paused, setPaused] = React.useState(false);
+  const startSec = useDerivedValue(() => {
+    if (videoDuration === 0) return 0;
+    return (leftHandleX.value / EFFECTIVE_TRACK_WIDTH) * videoDuration;
+  }, [videoDuration]);
 
-  React.useEffect(() => {
-    setEndSec(videoDuration);
-    setEndTime(formatTime(videoDuration));
+  const endSec = useDerivedValue(() => {
+    if (videoDuration === 0) return 0;
+    return (rightHandleX.value / EFFECTIVE_TRACK_WIDTH) * videoDuration;
   }, [videoDuration]);
 
   const onVideoLoad = React.useCallback((meta: OnLoadData) => {
-    const d = Number(meta?.duration) || 0;
-    if (d > 0) setVideoDuration(d);
-  }, []);
-
-  const seekThrottled = React.useCallback((t: number) => {
-    const now = Date.now();
-    if (now - lastSeekRef.current > SEEK_THROTTLE_MS) {
-      videoRef.current?.seek(t);
-      lastSeekRef.current = now;
+    if (meta.duration && meta.duration > 0) {
+      setVideoDuration(meta.duration);
+      setEndTimeStr(formatTime(meta.duration));
     }
   }, []);
 
-  const updateTimesOnJS = React.useCallback((start: number, end: number) => {
-    setStartSec(start);
-    setEndSec(end);
-    setStartTime(formatTime(start));
-    setEndTime(formatTime(end));
+  const updateTimeStrings = React.useCallback((start: number, end: number) => {
+    setStartTimeStr(formatTime(start));
+    setEndTimeStr(formatTime(end));
   }, []);
 
-  const resumePlayback = React.useCallback(() => setPaused(false), []);
-
   useAnimatedReaction(
-    () => ({ l: leftHandleX.value, r: rightHandleX.value }),
-    ({ l, r }: { l: number; r: number }) => {
-      const denom = TRACK_WIDTH - HANDLE_WIDTH || 1;
-      const s = wClamp((l / denom) * videoDuration, 0, videoDuration);
-      const e = wClamp((r / denom) * videoDuration, 0, videoDuration);
-      runOnJS(updateTimesOnJS)(s, e);
+    () => ({ start: startSec.value, end: endSec.value }),
+    (current, previous) => {
+      if (current.start !== previous?.start || current.end !== previous?.end) {
+        runOnJS(updateTimeStrings)(current.start, current.end);
+      }
     },
-    [videoDuration]
+    [updateTimeStrings]
   );
+
+  const seekVideo = React.useCallback((time: number) => {
+    videoRef.current?.seek(time);
+  }, []);
 
   const leftPanGesture = Gesture.Pan()
     .onStart(() => {
-      startX.value = leftHandleX.value;
-      runOnJS(resumePlayback)();
+      dragContextX.value = leftHandleX.value;
     })
     .onUpdate((event) => {
-      const newX = startX.value + event.translationX;
-      leftHandleX.value = wClamp(newX, 0, rightHandleX.value - HANDLE_WIDTH);
-      const denom = TRACK_WIDTH - HANDLE_WIDTH || 1;
-      const t = wClamp((leftHandleX.value / denom) * videoDuration, 0, videoDuration);
-      runOnJS(seekThrottled)(t);
-    })
-    .onEnd(() => {
-      leftHandleX.value = withSpring(leftHandleX.value);
+      const newX = dragContextX.value + event.translationX;
+      leftHandleX.value = clamp(newX, 0, rightHandleX.value - HANDLE_WIDTH);
+      runOnJS(seekVideo)(startSec.value);
     });
 
   const rightPanGesture = Gesture.Pan()
     .onStart(() => {
-      startX.value = rightHandleX.value;
-      runOnJS(resumePlayback)();
+      dragContextX.value = rightHandleX.value;
     })
     .onUpdate((event) => {
-      const newX = startX.value + event.translationX;
-      rightHandleX.value = wClamp(newX, leftHandleX.value + HANDLE_WIDTH, TRACK_WIDTH - HANDLE_WIDTH);
-      const denom = TRACK_WIDTH - HANDLE_WIDTH || 1;
-      const t = wClamp((rightHandleX.value / denom) * videoDuration, 0, videoDuration);
-      runOnJS(seekThrottled)(t);
-    })
-    .onEnd(() => {
-      rightHandleX.value = withSpring(rightHandleX.value);
+      const newX = dragContextX.value + event.translationX;
+      rightHandleX.value = clamp(
+        newX,
+        leftHandleX.value + HANDLE_WIDTH,
+        EFFECTIVE_TRACK_WIDTH
+      );
+      runOnJS(seekVideo)(endSec.value);
     });
+
+  const onVideoProgress = React.useCallback(
+    (progress: OnProgressData) => {
+      setCurrentTime(progress.currentTime);
+
+        const loopStart = startSec.value;
+        const loopEnd = endSec.value;
+        const isValidRange = loopEnd > loopStart + LOOP_EPSILON;
+        if (isValidRange && progress.currentTime >= loopEnd - LOOP_EPSILON) {
+          videoRef.current?.seek(loopStart);
+        }
+
+    },
+    []
+  );
+
+  const onCalibrate = React.useCallback(() => {
+    const s = startSec.value;
+    const e = endSec.value;
+    const duration = e - s;
+
+    if (duration < 0.1) {
+      Alert.alert(
+        'Selection Too Short',
+        'Please select a longer video segment.'
+      );
+      return;
+    }
+
+    if (duration > 1) {
+      Alert.alert(
+        'Selection Too Long',
+        'Please select a shorter video segment.'
+      );
+      return;
+    }
+
+    navigation.navigate('Calibration', {
+      sourceUri,
+      duration,
+      startSec: s,
+      endSec: e,
+    });
+  }, [navigation, sourceUri]);
 
   const leftHandleStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: leftHandleX.value }],
   }));
+
   const rightHandleStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: rightHandleX.value }],
   }));
+
   const selectedTrackStyle = useAnimatedStyle(() => ({
     left: leftHandleX.value + HANDLE_WIDTH / 2,
     right: TRACK_WIDTH - rightHandleX.value - HANDLE_WIDTH / 2,
   }));
 
-  const onVideoProgress = React.useCallback(
-    (prog: OnProgressData) => {
-      const t = prog.currentTime ?? 0;
-      setNowSec(t);
-
-      if (!paused) {
-        const loopStart = Number.isFinite(startSec) ? startSec : 0;
-        const validRange = Number.isFinite(endSec) && endSec > loopStart + LOOP_EPS;
-        const loopEnd = validRange ? endSec : videoDuration;
-        if (t >= loopEnd - LOOP_EPS) {
-          videoRef.current?.seek(loopStart);
-        }
-      }
-    },
-    [paused, startSec, endSec, videoDuration]
-  );
-
-  const onCalibrate = React.useCallback(() => {
-    // @ts-ignore
-    navigation.navigate('Calibration', { sourceUri, duration: videoDuration, startSec, endSec });
-  }, [navigation, sourceUri, videoDuration, startSec, endSec]);
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Trim Video</Text>
-        <TouchableOpacity 
-          onPress={onCalibrate} 
-          style={styles.calibrateButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
+        <TouchableOpacity onPress={onCalibrate} style={styles.calibrateButton}>
           <Text style={styles.calibrateText}>Calibrate</Text>
         </TouchableOpacity>
       </View>
@@ -194,36 +192,30 @@ const TrimScreen: React.FC = () => {
       <View style={styles.videoContainer}>
         <Video
           ref={videoRef}
-          key={sourceUri}
           source={{ uri: sourceUri }}
           style={styles.video}
-          controls={false}
-          paused={paused}
+          paused={false}
+          muted={true}
           resizeMode="contain"
           onLoad={onVideoLoad}
-          progressUpdateInterval={33}
           onProgress={onVideoProgress}
-          onEnd={() => {
-            const loopStart = Number.isFinite(startSec) ? startSec : 0;
-            videoRef.current?.seek(loopStart);
-          }}
-          onError={(e) => console.error('Video error', e)}
+          progressUpdateInterval={100}
         />
         <View style={styles.clockPill}>
           <Text style={styles.clockText}>
-            {formatTime(nowSec)} / {formatTime(videoDuration)}
+            {formatTime(currentTime)} / {formatTime(videoDuration)}
           </Text>
         </View>
       </View>
 
       <View style={styles.trimmerContainer}>
         <View style={styles.timeLabelContainer}>
-          <Text style={styles.timeLabel}>{startTime}</Text>
-          <Text style={styles.timeLabel}>{endTime}</Text>
+          <Text style={styles.timeLabel}>{startTimeStr}</Text>
+          <Text style={styles.timeLabel}>{endTimeStr}</Text>
         </View>
         <View style={styles.trackContainer}>
-          <Animated.View style={[styles.selectedTrack, selectedTrackStyle]} />
           <View style={styles.track} />
+          <Animated.View style={[styles.selectedTrack, selectedTrackStyle]} />
           <GestureDetector gesture={leftPanGesture}>
             <Animated.View style={[styles.handle, leftHandleStyle]}>
               <View style={styles.handleIndicator} />
@@ -244,10 +236,10 @@ const TrimScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#000', 
-    alignItems: 'center' 
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+    alignItems: 'center',
   },
   header: {
     width: '100%',
@@ -256,36 +248,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#000',
-    zIndex: 10,
-    elevation: 10,
   },
-  title: { 
-    color: '#fff', 
-    fontSize: 20, 
+  title: {
+    color: '#fff',
+    fontSize: 20,
     fontWeight: 'bold',
-    flex: 1,
-    textAlign: 'center'
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    textAlign: 'center',
   },
   calibrateButton: {
     backgroundColor: '#007AFF',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 8,
+    marginLeft: 'auto',
   },
-  calibrateText: { 
-    color: '#fff', 
-    fontSize: 16, 
-    fontWeight: '600' 
+  calibrateText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
-  videoContainer: { 
-    flex: 1, 
-    width: '100%', 
-    justifyContent: 'center' 
+  videoContainer: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
   },
-  video: { 
-    width: '100%', 
-    height: '100%' 
+  video: {
+    width: '100%',
+    height: '100%',
   },
   clockPill: {
     position: 'absolute',
@@ -296,69 +288,64 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
   },
-  clockText: { 
-    color: '#fff', 
+  clockText: {
+    color: '#fff',
     fontVariant: ['tabular-nums'],
-    fontSize: 12
+    fontSize: 12,
   },
-  trimmerContainer: { 
-    width: '100%', 
-    padding: TRIMMER_PADDING, 
-    paddingVertical: 40 
+  trimmerContainer: {
+    width: '100%',
+    padding: TRIMMER_PADDING,
+    paddingBottom: 20,
   },
-  timeLabelContainer: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    marginBottom: 10 
+  timeLabelContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  timeLabel: { 
-    color: '#fff', 
+  timeLabel: {
+    color: '#fff',
     fontSize: 14,
-    fontWeight: '500'
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'],
   },
-  trackContainer: { 
-    height: 40, 
-    width: TRACK_WIDTH, 
-    justifyContent: 'center', 
+  trackContainer: {
+    height: 40,
+    width: TRACK_WIDTH,
+    justifyContent: 'center',
     alignSelf: 'center',
-    marginBottom: 12
   },
-  track: { 
-    height: 4, 
-    backgroundColor: 'rgba(255, 255, 255, 0.3)', 
-    borderRadius: 2 
+  track: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
   },
-  selectedTrack: { 
-    height: 6, 
-    backgroundColor: '#007AFF', 
-    borderRadius: 3, 
-    position: 'absolute' 
+  selectedTrack: {
+    height: 6,
+    backgroundColor: '#007AFF',
+    borderRadius: 3,
+    position: 'absolute',
   },
-  handle: { 
-    width: HANDLE_WIDTH, 
-    height: 40, 
-    position: 'absolute', 
-    justifyContent: 'center', 
-    alignItems: 'center' 
+  handle: {
+    width: HANDLE_WIDTH,
+    height: 40,
+    position: 'absolute',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   handleIndicator: {
-    width: 6, 
-    height: 24, 
-    backgroundColor: '#fff', 
-    borderRadius: 3, 
-    borderWidth: 1, 
+    width: 6,
+    height: 24,
+    backgroundColor: '#fff',
+    borderRadius: 3,
+    borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.5)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
   },
   instructionText: {
     color: 'rgba(255, 255, 255, 0.7)',
     fontSize: 14,
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 16,
   },
 });
 

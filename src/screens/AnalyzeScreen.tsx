@@ -12,7 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Video, { OnLoadData } from 'react-native-video';
 import { runDetection, mapModelToVideo, Box } from '../ml/yolo';
-import { pxPerSecToKph } from '../ml/kalman'; // using only the converter
+import { pxPerSecToKph } from '../ml/kalman';
+import LinearGradient from 'react-native-linear-gradient';
 
 type AnalyzeParams = {
   sourceUri: string;
@@ -31,16 +32,14 @@ type Selected =
   | { type: 'ai'; idx: number }
   | { type: 'user'; idx: number };
 
-type Result = { maxKph: number; atIndex: number } | null;
-
-export default function AnalyzeScreen({ route }: any) {
+export default function AnalyzeScreen({ route, navigation }: any) {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const { sourceUri, startSec, endSec, metersPerPixel } = route.params as AnalyzeParams;
 
   const [isLoading, setIsLoading] = useState(false);
   const [vw, setVw] = useState(0);
   const [vh, setVh] = useState(0);
-  const [drawRect, setDrawRect] = useState({ x: 0, y: 0, w: screenW, h: Math.floor(screenH * 0.6) });
+  const [drawRect, setDrawRect] = useState({ x: 0, y: 0, w: screenW, h: Math.floor(screenH * 0.5) });
   const [frames, setFrames] = useState<FrameDetections[]>([]);
 
   // Current frame index being shown
@@ -51,9 +50,6 @@ export default function AnalyzeScreen({ route }: any) {
   const [userBoxesByIndex, setUserBoxesByIndex] = useState<Record<number, VBox[]>>({});
   const [selected, setSelected] = useState<Selected | null>(null);
 
-  // Result modal state
-  const [result, setResult] = useState<Result>(null);
-
   const videoRef = useRef<VideoHandle | null>(null);
   const videoLoaded = useRef(false);
   const didAutoSeek = useRef(false);
@@ -62,7 +58,7 @@ export default function AnalyzeScreen({ route }: any) {
   useEffect(() => {
     if (!vw || !vh) return;
     const maxW = screenW;
-    const maxH = Math.floor(screenH * 0.6);
+    const maxH = Math.floor(screenH * 0.5);
     const scale = Math.min(maxW / vw, maxH / vh);
     const w = vw * scale;
     const h = vh * scale;
@@ -76,7 +72,6 @@ export default function AnalyzeScreen({ route }: any) {
     setPendingIndex(null);
     setUserBoxesByIndex({});
     setSelected(null);
-    setResult(null);
     didAutoSeek.current = false;
     try {
       await runDetection(sourceUri, 0, startSec, endSec); // 0 => native uses actual fps
@@ -246,8 +241,8 @@ export default function AnalyzeScreen({ route }: any) {
 
   const speedLabel = currentSpeedKph != null ? `${currentSpeedKph.toFixed(1)} km/h` : '—';
 
-  // Max speed across run
-  const maxSpeed = useMemo(() => {
+  // Max speed across run and trajectory angle calculation
+  const maxSpeedData = useMemo(() => {
     let best = { maxKph: -Infinity, atIndex: -1 };
     for (let i = 0; i < speedsKph.length; i++) {
       const v = speedsKph[i];
@@ -255,16 +250,43 @@ export default function AnalyzeScreen({ route }: any) {
         best = { maxKph: v as number, atIndex: i };
       }
     }
-    return best.maxKph === -Infinity ? null : best;
-  }, [speedsKph]);
+    
+    // Calculate angle at max speed frame
+    let angle = 0;
+    if (best.atIndex >= 0 && best.atIndex < centers.length - 1) {
+      const current = centers[best.atIndex];
+      const next = centers[best.atIndex + 1];
+      if (current && next) {
+        const dx = next.x - current.x;
+        const dy = next.y - current.y;
+        angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        // Normalize to 0-360 degrees
+        if (angle < 0) angle += 360;
+      }
+    }
+    
+    return best.maxKph === -Infinity ? null : { ...best, angle };
+  }, [speedsKph, centers]);
 
   const finish = () => {
-    if (!maxSpeed) {
-      setResult({ maxKph: 0, atIndex: -1 });
+    if (!maxSpeedData) {
+      navigation.navigate('SpeedResult', {
+        maxKph: 0,
+        angle: 0,
+        videoUri: sourceUri,
+        startSec,
+        endSec,
+      });
       return;
     }
-    setResult(maxSpeed);
-    seekToIndex(maxSpeed.atIndex);
+    
+    navigation.navigate('SpeedResult', {
+      maxKph: maxSpeedData.maxKph,
+      angle: maxSpeedData.angle,
+      videoUri: sourceUri,
+      startSec,
+      endSec,
+    });
   };
 
   // ---------- Manual box helpers ----------
@@ -385,291 +407,418 @@ export default function AnalyzeScreen({ route }: any) {
   }, [detectedVideoBoxes, userVideoBoxes, metersPerPixel, vw, vh]);
 
   return (
-    <SafeAreaView style={styles.root}>
-      <View style={[styles.videoWrap, { height: drawRect.h }]}>
-        <Video
-          ref={videoRef}
-          source={{ uri: sourceUri }}
-          style={[styles.video, { width: drawRect.w, height: drawRect.h, left: drawRect.x }]}
-          resizeMode="contain"
-          paused={true}
-          onLoad={onLoad}
-          onSeek={onSeek}
-          controls={false}
-        />
+    <View style={styles.container}>
+      {/* Background Gradient */}
+      <LinearGradient
+        colors={['rgba(0, 122, 255, 0.1)', 'rgba(0, 122, 255, 0.05)', 'transparent']}
+        style={styles.backgroundGradient}
+      />
 
-        {/* Model detections (AI, red) */}
-        {detectedVideoBoxes.map((b, i) => (
-          <DetBox key={`d-${i}`} b={b} i={i} />
-        ))}
-
-        {/* User boxes (cyan) */}
-        {(userBoxesByIndex[currentIndex] || []).map((b, i) => (
-          <UserBox key={`u-${i}`} b={b} i={i} />
-        ))}
-      </View>
-
-      {/* Frame navigation */}
-      <View style={styles.controls}>
-        <TouchableOpacity
-          onPress={prevFrame}
-          disabled={atStart || isLoading}
-          style={[styles.arrowBtn, (atStart || isLoading) && styles.btnDisabled]}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Text style={styles.arrowTxt}>◀︎ Prev</Text>
-        </TouchableOpacity>
-
-        <View style={styles.readout}>
-          <Text style={styles.readoutTxt}>{frameReadout}</Text>
-          <Text style={styles.readoutTxt}>{timeLabel}</Text>
-          {meterReadout && <Text style={styles.readoutSub}>Largest box ≈ {meterReadout}</Text>}
-          <Text style={styles.readoutSub}>Speed: {speedLabel}</Text>
+      <SafeAreaView style={styles.root}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Analyze Video</Text>
+          <View style={{ width: 60 }} />
         </View>
 
-        <TouchableOpacity
-          onPress={nextFrame}
-          disabled={atEnd || isLoading}
-          style={[styles.arrowBtn, (atEnd || isLoading) && styles.btnDisabled]}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Text style={styles.arrowTxt}>Next ▶︎</Text>
-        </TouchableOpacity>
-      </View>
+        {/* Video Section */}
+        <View style={styles.glassPanel}>
+          <View style={[styles.videoWrap, { height: drawRect.h }]}>
+            <Video
+              ref={videoRef}
+              source={{ uri: sourceUri }}
+              style={[styles.video, { width: drawRect.w, height: drawRect.h, left: drawRect.x }]}
+              resizeMode="contain"
+              paused={true}
+              onLoad={onLoad}
+              onSeek={onSeek}
+              controls={false}
+            />
 
-      {/* Manual edit bar */}
-      <View style={styles.editBar}>
-        <TouchableOpacity onPress={addBox} style={styles.smallBtn}>
-          <Text style={styles.smallBtnTxt}>＋ Add Box</Text>
-        </TouchableOpacity>
+            {/* Model detections (AI, red) */}
+            {detectedVideoBoxes.map((b, i) => (
+              <DetBox key={`d-${i}`} b={b} i={i} />
+            ))}
 
-        <TouchableOpacity
-          onPress={deleteSelected}
-          disabled={!selected}
-          style={[styles.smallBtn, !selected && styles.btnDisabled]}
-        >
-          <Text style={styles.smallBtnTxt}>⨉ Delete</Text>
-        </TouchableOpacity>
+            {/* User boxes (cyan) */}
+            {(userBoxesByIndex[currentIndex] || []).map((b, i) => (
+              <UserBox key={`u-${i}`} b={b} i={i} />
+            ))}
+          </View>
 
-        <View style={styles.divider} />
-
-        {/* Move/resize controls (enabled only for user boxes) */}
-        <View style={styles.inlineCol}>
-          <TouchableOpacity
-            onPress={() => nudge(0, -step)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.stepBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.stepTxt}>↑</Text>
-          </TouchableOpacity>
-          <View style={styles.row}>
+          {/* Frame navigation */}
+          <View style={styles.controls}>
             <TouchableOpacity
-              onPress={() => nudge(-step, 0)}
-              disabled={selected?.type !== 'user'}
-              style={[styles.stepBtn, selected?.type !== 'user' && styles.btnDisabled]}
+              onPress={prevFrame}
+              disabled={atStart || isLoading}
+              style={[styles.controlButton, (atStart || isLoading) && styles.buttonDisabled]}
             >
-              <Text style={styles.stepTxt}>←</Text>
+              <Text style={styles.controlButtonText}>◀︎ Prev</Text>
             </TouchableOpacity>
+
+            <View style={styles.readout}>
+              <Text style={styles.readoutText}>{frameReadout}</Text>
+              <Text style={styles.readoutSubtext}>{timeLabel}</Text>
+              {meterReadout && <Text style={styles.readoutSubtext}>Box ≈ {meterReadout}</Text>}
+              <Text style={styles.readoutSubtext}>Speed: {speedLabel}</Text>
+            </View>
+
             <TouchableOpacity
-              onPress={() => nudge(step, 0)}
-              disabled={selected?.type !== 'user'}
-              style={[styles.stepBtn, selected?.type !== 'user' && styles.btnDisabled]}
+              onPress={nextFrame}
+              disabled={atEnd || isLoading}
+              style={[styles.controlButton, (atEnd || isLoading) && styles.buttonDisabled]}
             >
-              <Text style={styles.stepTxt}>→</Text>
+              <Text style={styles.controlButtonText}>Next ▶︎</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            onPress={() => nudge(0, step)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.stepBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.stepTxt}>↓</Text>
-          </TouchableOpacity>
         </View>
 
-        <View style={styles.row}>
-          <TouchableOpacity
-            onPress={() => resize(-step, 0)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.smallBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.smallBtnTxt}>W−</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => resize(step, 0)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.smallBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.smallBtnTxt}>W＋</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => resize(0, -step)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.smallBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.smallBtnTxt}>H−</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => resize(0, step)}
-            disabled={selected?.type !== 'user'}
-            style={[styles.smallBtn, selected?.type !== 'user' && styles.btnDisabled]}
-          >
-            <Text style={styles.smallBtnTxt}>H＋</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Manual edit controls */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.sectionTitle}>Manual Adjustments</Text>
+          
+          <View style={styles.editRow}>
+            <TouchableOpacity onPress={addBox} style={styles.editButton}>
+              <Text style={styles.editButtonText}>＋ Add Box</Text>
+            </TouchableOpacity>
 
-        <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              onPress={deleteSelected}
+              disabled={!selected}
+              style={[styles.editButton, styles.deleteButton, !selected && styles.buttonDisabled]}
+            >
+              <Text style={styles.editButtonText}>⨉ Delete</Text>
+            </TouchableOpacity>
+          </View>
 
-        {/* Finish */}
-        <TouchableOpacity onPress={finish} style={[styles.smallBtn, styles.finishBtn]}>
-          <Text style={[styles.smallBtnTxt, { fontWeight: '800' }]}>Finish</Text>
-        </TouchableOpacity>
-
-        {selected?.type === 'ai' && (
-          <Text style={styles.roHint}>AI box selected (move/resize disabled)</Text>
-        )}
-        {selected?.type === 'user' && (
-          <Text style={styles.roHint}>Step: {step}px (video space)</Text>
-        )}
-      </View>
-
-      <View style={styles.footer}>
-        <Text style={styles.footerTxt}>
-          Trim: {startSec.toFixed(2)}s → {endSec.toFixed(2)}s • Scale: {metersPerPixel.toExponential(3)} m/px
-        </Text>
-      </View>
-
-      {/* Result modal */}
-      {!!result && (
-        <View style={styles.resultOverlay} pointerEvents="box-none">
-          <View style={styles.resultCard}>
-            <Text style={styles.resultTitle}>Max Speed</Text>
-            <Text style={styles.resultValue}>{result.maxKph.toFixed(1)} km/h</Text>
-            {result.atIndex >= 0 && (
-              <Text style={styles.resultSub}>at frame {result.atIndex + 1}</Text>
-            )}
-            <View style={styles.resultRow}>
+          {/* Move controls */}
+          <View style={styles.moveControls}>
+            <View style={styles.moveColumn}>
               <TouchableOpacity
-                onPress={() => {
-                  if (result.atIndex >= 0) seekToIndex(result.atIndex);
-                  setResult(null);
-                }}
-                style={[styles.resBtn, styles.resPrimary]}
+                onPress={() => nudge(0, -step)}
+                disabled={selected?.type !== 'user'}
+                style={[styles.moveButton, selected?.type !== 'user' && styles.buttonDisabled]}
               >
-                <Text style={styles.resBtnTxt}>Go to fastest</Text>
+                <Text style={styles.moveButtonText}>↑</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setResult(null)} style={[styles.resBtn, styles.resGhost]}>
-                <Text style={styles.resBtnTxt}>Close</Text>
+              <View style={styles.moveRow}>
+                <TouchableOpacity
+                  onPress={() => nudge(-step, 0)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.moveButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.moveButtonText}>←</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => nudge(step, 0)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.moveButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.moveButtonText}>→</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                onPress={() => nudge(0, step)}
+                disabled={selected?.type !== 'user'}
+                style={[styles.moveButton, selected?.type !== 'user' && styles.buttonDisabled]}
+              >
+                <Text style={styles.moveButtonText}>↓</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
-      )}
 
-      {isLoading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#FFFFFF" />
-          <Text style={styles.loadingText}>Processing Video...</Text>
+            <View style={styles.resizeControls}>
+              <View style={styles.resizeRow}>
+                <TouchableOpacity
+                  onPress={() => resize(-step, 0)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.resizeButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.resizeButtonText}>W−</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => resize(step, 0)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.resizeButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.resizeButtonText}>W＋</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.resizeRow}>
+                <TouchableOpacity
+                  onPress={() => resize(0, -step)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.resizeButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.resizeButtonText}>H−</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => resize(0, step)}
+                  disabled={selected?.type !== 'user'}
+                  style={[styles.resizeButton, selected?.type !== 'user' && styles.buttonDisabled]}
+                >
+                  <Text style={styles.resizeButtonText}>H＋</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+
+          {selected?.type === 'ai' && (
+            <Text style={styles.hint}>AI box selected (move/resize disabled)</Text>
+          )}
+          {selected?.type === 'user' && (
+            <Text style={styles.hint}>Step: {step}px (video space)</Text>
+          )}
         </View>
-      )}
-    </SafeAreaView>
+
+        {/* Finish Button */}
+        <TouchableOpacity onPress={finish} style={styles.finishButton}>
+          <Text style={styles.finishButtonText}>Calculate Speed</Text>
+        </TouchableOpacity>
+
+        {/* Footer */}
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            Trim: {startSec.toFixed(2)}s → {endSec.toFixed(2)}s • Scale: {metersPerPixel.toExponential(3)} m/px
+          </Text>
+        </View>
+
+        {/* Loading overlay */}
+        {isLoading && (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.loadingText}>Processing Video...</Text>
+          </View>
+        )}
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+  container: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+  },
+  backgroundGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  root: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
+  },
+  backButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+  },
+  backButtonText: {
+    color: '#007AFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+  },
+  glassPanel: {
+    backgroundColor: 'rgba(255, 255, 255, 1)',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    padding: 20,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
   videoWrap: {
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#000',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  video: { position: 'absolute', top: 0 },
-
-  // Boxes
+  video: {
+    position: 'absolute',
+    top: 0,
+  },
   box: {
     position: 'absolute',
     borderWidth: 2,
     backgroundColor: 'transparent',
   },
-  detBox: { borderColor: '#FF3B30' },     // red (AI)
-  userBox: { borderColor: '#0fd1ff' },    // cyan (user)
-  selBox: { borderColor: '#FFD60A', borderWidth: 3 }, // yellow highlight
-
-  // Frame controls
+  detBox: {
+    borderColor: '#FF3B30',
+  },
+  userBox: {
+    borderColor: '#0fd1ff',
+  },
+  selBox: {
+    borderColor: '#FFD60A',
+    borderWidth: 3,
+  },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    gap: 10,
     justifyContent: 'space-between',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#222',
+    marginTop: 15,
   },
-  arrowBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 10,
-  },
-  arrowTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  btnDisabled: { opacity: 0.4 },
-
-  readout: { alignItems: 'center', justifyContent: 'center' },
-  readoutTxt: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  readoutSub: { color: '#ccc', fontSize: 12, marginTop: 2 },
-
-  // Manual edit bar
-  editBar: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#222',
-    backgroundColor: '#0A0A0A',
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  smallBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 10,
-    alignItems: 'center',
-    marginRight: 8,
-    marginBottom: 6,
-  },
-  finishBtn: { backgroundColor: '#0A84FF' },
-  smallBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 12 },
-  divider: { width: 1, height: 22, backgroundColor: '#222', marginHorizontal: 8 },
-  roHint: { color: '#888', fontSize: 12, marginLeft: 6, marginBottom: 6 },
-
-  row: { flexDirection: 'row', alignItems: 'center' },
-  inlineCol: { flexDirection: 'column', alignItems: 'center', marginRight: 8 },
-
-  stepBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    margin: 2,
-    minWidth: 40,
-  },
-  stepTxt: { color: '#fff', fontWeight: '800', fontSize: 12 },
-
-  footer: {
+  controlButton: {
+    backgroundColor: '#007AFF',
     paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  controlButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  buttonDisabled: {
+    opacity: 0.4,
+  },
+  readout: {
+    alignItems: 'center',
+  },
+  readoutText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000',
+  },
+  readoutSubtext: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#000',
+    marginBottom: 15,
+  },
+  editRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 15,
+  },
+  editButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    flex: 1,
+    alignItems: 'center',
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+  },
+  editButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  moveControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  moveColumn: {
+    alignItems: 'center',
+  },
+  moveRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginVertical: 10,
+  },
+  moveButton: {
+    backgroundColor: '#E5E5EA',
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#222',
+    borderRadius: 8,
+    minWidth: 40,
+    alignItems: 'center',
+  },
+  moveButtonText: {
+    color: '#000',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  resizeControls: {
+    alignItems: 'center',
+  },
+  resizeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginVertical: 4,
+  },
+  resizeButton: {
+    backgroundColor: '#E5E5EA',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 45,
+    alignItems: 'center',
+  },
+  resizeButtonText: {
+    color: '#000',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  hint: {
+    color: '#666',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  finishButton: {
+    backgroundColor: '#007AFF',
+    marginHorizontal: 20,
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  finishButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  footer: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     marginTop: 'auto',
   },
-  footerTxt: { color: '#bbb', fontSize: 12, textAlign: 'center' },
-
-  // Loading overlay
+  footerText: {
+    color: '#666',
+    fontSize: 12,
+    textAlign: 'center',
+  },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
@@ -681,32 +830,4 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
   },
-
-  // Result modal
-  resultOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resultCard: {
-    width: '80%',
-    backgroundColor: '#1C1C1E',
-    padding: 18,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#333',
-    alignItems: 'center',
-  },
-  resultTitle: { color: '#bbb', fontSize: 14, marginBottom: 6 },
-  resultValue: { color: '#fff', fontSize: 40, fontWeight: '800' },
-  resultSub: { color: '#aaa', fontSize: 12, marginTop: 4 },
-  resultRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  resBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  resPrimary: { backgroundColor: '#0A84FF' },
-  resGhost: { backgroundColor: '#2A2A2A' },
-  resBtnTxt: { color: '#fff', fontWeight: '700' },
 });

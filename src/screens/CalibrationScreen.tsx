@@ -37,7 +37,7 @@ const HANDLE_DIAMETER = 30;
 export default function CalibrationScreen() {
   const navigation = useNavigation();
   const route = useRoute<CalibRoute>();
-  const { sourceUri } = route.params;
+  const { sourceUri, duration, startSec, endSec } = route.params;
 
   const [referenceLength, setReferenceLength] = useState('3.87');
   const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
@@ -164,8 +164,8 @@ export default function CalibrationScreen() {
     // @ts-ignore
     navigation.navigate('Analyze', {
       sourceUri,
-      startSec: route.params.startSec,
-      endSec: route.params.endSec,
+      startSec: startSec,
+      endSec: endSec,
       metersPerPixel,
     });
   };

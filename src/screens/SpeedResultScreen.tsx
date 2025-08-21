@@ -6,30 +6,35 @@ import {
   StyleSheet,
   Animated,
   Easing,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import { Feather } from '@expo/vector-icons';
+import auth from '@react-native-firebase/auth';
+import { getFirestore, collection, addDoc, serverTimestamp } from '@react-native-firebase/firestore';
+import storage from '@react-native-firebase/storage';
+import { trim } from 'react-native-video-trim';
+import * as FileSystem from 'expo-file-system';
+import { RouteProp, useRoute } from '@react-navigation/native';
+import { RootStackParamList } from '../../App';
 
-type SpeedResultParams = {
-  maxKph: number;
-  angle: number;
-};
+type SpeedResultRouteProp = RouteProp<RootStackParamList, 'SpeedResult'>;
 
-export default function SpeedResultScreen({ route, navigation }: any) {
-  const { maxKph, angle } = route.params as SpeedResultParams;
-  
+export default function SpeedResultScreen({ navigation }: any) {
+  const route = useRoute<SpeedResultRouteProp>();
+  const { maxKph, angle, videoUri, startSec, endSec } = route.params;
+
   const [displaySpeed, setDisplaySpeed] = useState(0);
   const [displayAngle, setDisplayAngle] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'trimming' | 'saving' | 'saved' | 'not_logged_in' | 'error'>('idle');
+
   const animationValue = useRef(new Animated.Value(0)).current;
   const hasAnimated = useRef(false);
 
-  // Start the rolling animation when component mounts
   useEffect(() => {
     if (!hasAnimated.current) {
       hasAnimated.current = true;
-      
-      // Start animation after a small delay
       setTimeout(() => {
         Animated.timing(animationValue, {
           toValue: 1,
@@ -41,77 +46,111 @@ export default function SpeedResultScreen({ route, navigation }: any) {
     }
   }, [animationValue]);
 
-  // Update display values based on animation progress
   useEffect(() => {
     const listener = animationValue.addListener(({ value }) => {
-      const currentSpeed = value * maxKph;
-      const currentAngle = value * angle;
-      setDisplaySpeed(currentSpeed);
-      setDisplayAngle(currentAngle);
+      setDisplaySpeed(value * maxKph);
+      setDisplayAngle(value * angle);
     });
-
-    return () => {
-      animationValue.removeListener(listener);
-    };
+    return () => animationValue.removeListener(listener);
   }, [animationValue, maxKph, angle]);
 
-  const formatSpeed = (speed: number) => {
-    return speed.toFixed(1);
+  const goHome = () => navigation.navigate('Tabs');
+
+  const renderSaveStatus = () => {
+    switch (saveStatus) {
+      case 'trimming':
+        return <StatusIndicator text="Processing video..." color="#007AFF" icon={null} />;
+      case 'saving':
+        return <StatusIndicator text="Saving result..." color="#007AFF" icon={null} />;
+      case 'saved':
+        return <StatusIndicator text="Result saved" color="#007AFF" icon="check-circle" />;
+      case 'not_logged_in':
+        return <StatusIndicator text="Result not saved - Please log in" color="#007AFF" icon="info" />;
+      case 'error':
+        return <StatusIndicator text="Failed to save" color="#FF3B30" icon="alert-circle" />;
+      default:
+        return null;
+    }
   };
 
-  const formatAngle = (angleValue: number) => {
-    return Math.round(angleValue);
-  };
+  useEffect(() => {
+    const saveResult = async () => {
+      const user = auth().currentUser;
+      if (!user) return setSaveStatus('not_logged_in');
+      if (!videoUri) return setSaveStatus('error');
 
-  const goHome = () => {
-    navigation.navigate('Tabs');
-  };
+      setSaveStatus('trimming');
+      try {
+        const { uid } = user;
+        const timestamp = Date.now();
+        const trimmedFilename = `trimmed_${timestamp}.mp4`;
+        const trimmedPath = FileSystem.cacheDirectory + trimmedFilename;
+
+        console.log('Trimming video from', startSec, 'to', endSec, 'seconds');
+
+        const resultPath = await trim(videoUri, { startTime: startSec*1000, endTime: endSec*1000});
+        setSaveStatus('saving');
+
+        const filename = `${timestamp}.mp4`;
+        const storageRef = storage().ref(`videos/${uid}/${filename}`);
+        await storageRef.putFile(resultPath);
+        const videoURL = await storageRef.getDownloadURL();
+
+        await FileSystem.deleteAsync(resultPath).catch(console.warn);
+
+        const db = getFirestore();
+        await addDoc(collection(db, 'users', uid, 'detections'), {
+          angle: Math.round(angle),
+          date: serverTimestamp(),
+          peakSpeedKph: Math.round(maxKph),
+          videoURL,
+        });
+
+        setSaveStatus('saved');
+      } catch (error) {
+        console.error("Failed to save result:", error);
+        setSaveStatus('error');
+      }
+    };
+
+    saveResult();
+  }, [maxKph, angle, videoUri, startSec, endSec]);
 
   return (
     <View style={styles.container}>
-      {/* Background Gradient */}
-      <LinearGradient
-        colors={['rgba(0, 122, 255, 0.1)', 'rgba(0, 122, 255, 0.05)', 'transparent']}
-        style={styles.backgroundGradient}
-      />
-      
-      {/* Floating Circles */}
+      <LinearGradient colors={['rgba(0, 122, 255, 0.1)', 'rgba(0, 122, 255, 0.05)', 'transparent']} style={styles.backgroundGradient} />
       <View style={[styles.floatingCircle, styles.circle1]} />
       <View style={[styles.floatingCircle, styles.circle2]} />
-
       <SafeAreaView style={styles.root}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Analysis Complete</Text>
-        </View>
-
-        {/* Main Content */}
         <View style={styles.content}>
+          <Text style={styles.title}>Your smash speed is:</Text>
           <View style={styles.speedDisplay}>
-            <Text style={styles.speedNumber}>
-              {formatSpeed(displaySpeed)}
-            </Text>
+            <Text style={styles.speedNumber}>{displaySpeed.toFixed(1)}</Text>
             <Text style={styles.speedUnit}>km/h</Text>
           </View>
-
-          {angle > 0 && (
-            <View style={styles.angleDisplay}>
-              <Text style={styles.angleValue}>
-                {formatAngle(displayAngle)}°
-              </Text>
-              <Text style={styles.angleLabel}>Trajectory Angle</Text>
-            </View>
-          )}
+          <View style={styles.angleDisplay}>
+            <Text style={styles.angleValue}>{Math.round(displayAngle)}°</Text>
+            <Text style={styles.angleLabel}>Trajectory Angle</Text>
+          </View>
+          <View style={styles.statusWrapper}>{renderSaveStatus()}</View>
         </View>
-
-        {/* Action Button */}
         <View style={styles.footer}>
           <TouchableOpacity onPress={goHome} style={styles.primaryButton}>
-            <Icon name="home" size={20} color="white" />
+            <Feather name="home" size={20} color="white" />
             <Text style={styles.primaryButtonText}>New Analysis</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+    </View>
+  );
+}
+
+// Reusable component for status indication
+function StatusIndicator({ text, color, icon }: { text: string; color: string; icon: string | null }) {
+  return (
+    <View style={styles.statusContainer}>
+      {icon ? <Feather name={icon as any} size={18} color={color} /> : <ActivityIndicator size="small" color={color} />}
+      <Text style={[styles.statusText, { color }]}>{text}</Text>
     </View>
   );
 }
@@ -148,20 +187,12 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-  },
-  headerTitle: {
-    fontSize: 18,
+  title: {
+    fontSize: 22,
     fontWeight: '600',
-    color: '#000',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 40,
   },
   content: {
     flex: 1,
@@ -198,6 +229,25 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#888',
     marginTop: 4,
+  },
+  statusWrapper: {
+    marginTop: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  statusText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
   },
   footer: {
     paddingHorizontal: 20,
