@@ -1,11 +1,22 @@
 // src/screens/CalibrationScreen.tsx
 import React, { useState, useRef } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Alert, LayoutChangeEvent, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
+  Alert,
+  LayoutChangeEvent,
+  TextInput,
+  Platform,
+  Modal,
+  ImageBackground, // Added ImageBackground
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import Video, { OnLoadData } from 'react-native-video';
-import Svg, { Line } from 'react-native-svg';
-import { Gesture, GestureDetector, GestureUpdateEvent, PanGestureHandlerEventPayload } from 'react-native-gesture-handler';
+import Svg, { Line, Path } from 'react-native-svg';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -13,338 +24,343 @@ import Animated, {
   withTiming,
   SharedValue,
 } from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const AnimatedLine = Animated.createAnimatedComponent(Line);
 
+// --- Type Definitions ---
 type RootStackParamList = {
-  Calibration: {
-    sourceUri: string;
-    duration: number;
-    startSec: number;
-    endSec: number;
-  };
-  Analyze: {
-    sourceUri: string;
-    startSec: number;
-    endSec: number;
-    metersPerPixel: number;
-  };
+  Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
+  Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number };
 };
 type CalibRoute = RouteProp<RootStackParamList, 'Calibration'>;
+type CGPoint = { x: number; y: number };
+type CGSize = { width: number; height: number };
 
-const HANDLE_DIAMETER = 30;
+// --- Reusable Components ---
 
+const GlassPanel = ({ children, style }: { children: React.ReactNode; style?: any }) => {
+  if (Platform.OS === 'ios') {
+    return (
+      <BlurView intensity={80} tint="light" style={[styles.glassPanel, style]}>
+        {children}
+      </BlurView>
+    );
+  }
+  return <View style={[styles.glassPanelAndroid, style]}>{children}</View>;
+};
+
+const CalibrationHandle = ({ position, liveOffset, isDragging }: { position: SharedValue<CGPoint>, liveOffset: SharedValue<CGSize>, isDragging: SharedValue<boolean> }) => {
+  const animatedStyle = useAnimatedStyle(() => {
+    const scale = withTiming(isDragging.value ? 1.1 : 1, { duration: 150 });
+    return {
+      position: 'absolute',
+      left: position.value.x + liveOffset.value.width,
+      top: position.value.y + liveOffset.value.height,
+      transform: [{ scale }],
+    };
+  });
+
+  const animatedIndicatorStyle = useAnimatedStyle(() => ({
+    opacity: withTiming(isDragging.value ? 1 : 0),
+  }));
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <View style={styles.handleContainer}>
+        <Animated.View style={[styles.handleDragIndicator, animatedIndicatorStyle]} />
+        <View style={styles.handlePin}>
+          <Svg height="32" width="24" viewBox="0 0 24 32">
+            <Path
+              d="M12 32C12 25.6 0 20.8 0 12.8A12 12 0 1 1 24 12.8C24 20.8 12 25.6 12 32Z"
+              fill="red"
+            />
+          </Svg>
+          <View style={styles.handlePinDot} />
+          <View style={styles.handlePinCenterDot} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+};
+
+// --- Main Component ---
 export default function CalibrationScreen() {
   const navigation = useNavigation();
   const route = useRoute<CalibRoute>();
+  const insets = useSafeAreaInsets();
   const { sourceUri } = route.params;
 
   const [referenceLength, setReferenceLength] = useState('3.87');
-  const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
-  const videoW = useRef(0);
-  const videoH = useRef(0);
+  const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  const videoPixelSize = useRef({ width: 0, height: 0 });
+  const [showInfoSheet, setShowInfoSheet] = useState(false);
 
-  // Handle 1 Position & State
+  const point1 = useSharedValue({ x: 0, y: 0 });
+  const point2 = useSharedValue({ x: 0, y: 0 });
+  const liveOffset1 = useSharedValue({ width: 0, height: 0 });
+  const liveOffset2 = useSharedValue({ width: 0, height: 0 });
   const isDragging1 = useSharedValue(false);
-  const positionX1 = useSharedValue(0);
-  const positionY1 = useSharedValue(0);
-  const offsetX1 = useSharedValue(0);
-  const offsetY1 = useSharedValue(0);
-
-  // Handle 2 Position & State
   const isDragging2 = useSharedValue(false);
-  const positionX2 = useSharedValue(0);
-  const positionY2 = useSharedValue(0);
-  const offsetX2 = useSharedValue(0);
-  const offsetY2 = useSharedValue(0);
+  const activeHandle = useSharedValue<1 | 2 | null>(null);
 
   const onContainerLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
-    if (containerLayout.width === 0) {
-      setContainerLayout({ width, height });
-      positionX1.value = width * 0.25;
-      positionY1.value = height * 0.75;
-      positionX2.value = width * 0.75;
-      positionY2.value = height * 0.75;
+    if (viewSize.width === 0) {
+      setViewSize({ width, height });
+      point1.value = { x: width * 0.3, y: height * 0.8 };
+      point2.value = { x: width * 0.7, y: height * 0.8 };
     }
   };
 
   const onVideoLoad = (meta: OnLoadData) => {
-    videoW.current = meta.naturalSize.width;
-    videoH.current = meta.naturalSize.height;
-  };
-  
-  const createPanGesture = (
-    isDragging: SharedValue<boolean>,
-    positionX: SharedValue<number>,
-    positionY: SharedValue<number>,
-    offsetX: SharedValue<number>,
-    offsetY: SharedValue<number>
-  ) => {
-    return Gesture.Pan()
-      .onBegin(() => { isDragging.value = true; })
-      .onUpdate((event: GestureUpdateEvent<PanGestureHandlerEventPayload>) => {
-        offsetX.value = event.translationX;
-        offsetY.value = event.translationY;
-      })
-      .onEnd(() => {
-        positionX.value += offsetX.value;
-        positionY.value += offsetY.value;
-        offsetX.value = 0;
-        offsetY.value = 0;
-      })
-      .onFinalize(() => { isDragging.value = false; });
+    videoPixelSize.current = { width: meta.naturalSize.width, height: meta.naturalSize.height };
   };
 
-  const panGesture1 = createPanGesture(isDragging1, positionX1, positionY1, offsetX1, offsetY1);
-  const panGesture2 = createPanGesture(isDragging2, positionX2, positionY2, offsetX2, offsetY2);
-
-  const createAnimatedHandleStyle = (
-    isDragging: SharedValue<boolean>,
-    positionX: SharedValue<number>,
-    positionY: SharedValue<number>,
-    offsetX: SharedValue<number>,
-    offsetY: SharedValue<number>
-  ) => {
-    return useAnimatedStyle(() => {
-      const currentX = positionX.value + offsetX.value;
-      const currentY = positionY.value + offsetY.value;
-      const scale = withTiming(isDragging.value ? 1.2 : 1, { duration: 150 });
-      return {
-        transform: [
-          { translateX: currentX - HANDLE_DIAMETER / 2 },
-          { translateY: currentY - HANDLE_DIAMETER / 2 },
-          { scale },
-        ],
-      };
+  const panGesture = Gesture.Pan()
+    .onBegin((e) => {
+      const dist1 = Math.sqrt(Math.pow(e.x - point1.value.x, 2) + Math.pow(e.y - point1.value.y, 2));
+      const dist2 = Math.sqrt(Math.pow(e.x - point2.value.x, 2) + Math.pow(e.y - point2.value.y, 2));
+      
+      if (dist1 < dist2) {
+        activeHandle.value = 1;
+        isDragging1.value = true;
+      } else {
+        activeHandle.value = 2;
+        isDragging2.value = true;
+      }
+    })
+    .onUpdate((e) => {
+      if (activeHandle.value === 1) {
+        liveOffset1.value = { width: e.translationX, height: e.translationY };
+      } else {
+        liveOffset2.value = { width: e.translationX, height: e.translationY };
+      }
+    })
+    .onEnd((e) => {
+      if (activeHandle.value === 1) {
+        const newX = point1.value.x + e.translationX;
+        const newY = point1.value.y + e.translationY;
+        point1.value = {
+          x: Math.max(0, Math.min(newX, viewSize.width)),
+          y: Math.max(0, Math.min(newY, viewSize.height)),
+        };
+        liveOffset1.value = { width: 0, height: 0 };
+      } else {
+        const newX = point2.value.x + e.translationX;
+        const newY = point2.value.y + e.translationY;
+        point2.value = {
+          x: Math.max(0, Math.min(newX, viewSize.width)),
+          y: Math.max(0, Math.min(newY, viewSize.height)),
+        };
+        liveOffset2.value = { width: 0, height: 0 };
+      }
+    })
+    .onFinalize(() => {
+      isDragging1.value = false;
+      isDragging2.value = false;
+      activeHandle.value = null;
     });
-  };
 
-  const animatedHandleStyle1 = createAnimatedHandleStyle(isDragging1, positionX1, positionY1, offsetX1, offsetY1);
-  const animatedHandleStyle2 = createAnimatedHandleStyle(isDragging2, positionX2, positionY2, offsetX2, offsetY2);
+  const animatedLineProps = useAnimatedProps(() => ({
+    x1: point1.value.x + liveOffset1.value.width,
+    y1: point1.value.y + liveOffset1.value.height,
+    x2: point2.value.x + liveOffset2.value.width,
+    y2: point2.value.y + liveOffset2.value.height,
+  }));
 
-  const animatedLineProps = useAnimatedProps(() => {
-    return {
-      x1: positionX1.value + offsetX1.value,
-      y1: positionY1.value + offsetY1.value,
-      x2: positionX2.value + offsetX2.value,
-      y2: positionY2.value + offsetY2.value,
-    };
-  });
-
-  const onAnalyze = () => {
+  const calculateAndProceed = () => {
     const realLength = parseFloat(referenceLength);
     if (!Number.isFinite(realLength) || realLength <= 0) {
-      Alert.alert('Invalid Input', 'Please enter a valid reference length in meters.');
+      Alert.alert('Invalid Input', 'Please enter a valid reference length.');
+      return;
+    }
+    if (videoPixelSize.current.width === 0 || viewSize.width === 0) {
+      Alert.alert('Error', 'Video dimensions not loaded yet.');
       return;
     }
 
-    const { width: boxW, height: boxH } = containerLayout;
-    if (!boxW || !boxH || !videoW.current || !videoH.current) {
-      Alert.alert('Error', 'Video dimensions not loaded yet. Please wait a moment.');
-      return;
-    }
-
-    // Distance between the two draggable points (in container coords)
-    const dx = (positionX2.value + offsetX2.value) - (positionX1.value + offsetX1.value);
-    const dy = (positionY2.value + offsetY2.value) - (positionY1.value + offsetY1.value);
+    const dx = point2.value.x - point1.value.x;
+    const dy = point2.value.y - point1.value.y;
     const pointDistance = Math.sqrt(dx * dx + dy * dy);
 
-    // Container shows the video with `contain` → uniform scale
-    const scaleRatio = Math.min(boxW / videoW.current, boxH / videoH.current);
-    const pixelDistance = pointDistance / scaleRatio;
+    const scaleRatio = Math.min(viewSize.width / videoPixelSize.current.width, viewSize.height / videoPixelSize.current.height);
+    if (scaleRatio <= 0) return;
 
-    if (!Number.isFinite(pixelDistance) || pixelDistance <= 0) {
-      Alert.alert('Invalid Points', 'Please move the handles to two distinct points.');
+    const pixelDistance = pointDistance / scaleRatio;
+    if (pixelDistance <= 0) {
+      Alert.alert('Invalid Points', 'Please move handles to two distinct points.');
       return;
     }
 
     const metersPerPixel = realLength / pixelDistance;
-
     // @ts-ignore
-    navigation.navigate('Analyze', {
-      sourceUri,
-      startSec: route.params.startSec,
-      endSec: route.params.endSec,
-      metersPerPixel,
-    });
+    navigation.navigate('Analyze', { ...route.params, metersPerPixel });
   };
 
   return (
-    <SafeAreaView style={styles.root}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Calibration</Text>
-        <TouchableOpacity 
-          onPress={onAnalyze} 
-          style={styles.analyzeButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Text style={styles.analyzeText}>Analyze</Text>
-        </TouchableOpacity>
-      </View>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ImageBackground
+        style={styles.root}
+        source={require('../../assets/aurora_background.png')}
+      >
+        <View style={[styles.topBar, { paddingTop: insets.top }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.topBarButton}>
+            <Text style={styles.topBarButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <Text style={styles.topBarTitle}>Set Scale</Text>
+          <TouchableOpacity onPress={() => setShowInfoSheet(true)} style={styles.topBarButton}>
+            <Ionicons name="information-circle-outline" size={24} color="#007AFF" />
+          </TouchableOpacity>
+        </View>
 
-      <View style={styles.container}>
-        <View style={styles.mediaWrap} onLayout={onContainerLayout}>
-          {containerLayout.width > 0 && (
-            <>
-              <Video
-                source={{ uri: sourceUri }}
-                style={StyleSheet.absoluteFill}
-                resizeMode="contain"
-                paused={true}
-                onLoad={onVideoLoad}
-              />
-              <Svg style={StyleSheet.absoluteFill}>
-                <AnimatedLine
-                  animatedProps={animatedLineProps}
-                  stroke="cyan"
-                  strokeWidth="3"
-                  strokeDasharray="8,4"
-                />
-              </Svg>
-              <GestureDetector gesture={panGesture1}>
-                <Animated.View style={[styles.handle, animatedHandleStyle1]} />
-              </GestureDetector>
-              <GestureDetector gesture={panGesture2}>
-                <Animated.View style={[styles.handle, animatedHandleStyle2]} />
-              </GestureDetector>
-            </>
-          )}
-        </View>
-      </View>
-      
-      <View style={styles.panel}>
-        <View style={styles.instructionRow}>
-          <Text style={styles.instructionIcon}>📏</Text>
-          <Text style={styles.instructionText}>Drag markers to align with a known distance</Text>
-        </View>
-        
-        <View style={styles.inputRow}>
-          <Text style={styles.inputLabel}>Reference Length</Text>
-          <View style={styles.inputRight}>
-            <TextInput
-              value={referenceLength}
-              onChangeText={setReferenceLength}
-              keyboardType="decimal-pad"
-              style={styles.textInput}
-              placeholderTextColor="rgba(255,255,255,0.4)"
-            />
-            <Text style={styles.unit}>meters</Text>
+        <GestureDetector gesture={panGesture}>
+          <View style={styles.videoContainer} onLayout={onContainerLayout}>
+            {viewSize.width > 0 && (
+              <>
+                <Video source={{ uri: sourceUri }} style={styles.video} resizeMode="contain" paused={true} onLoad={onVideoLoad} />
+                <Svg style={StyleSheet.absoluteFill}>
+                  <AnimatedLine animatedProps={animatedLineProps} stroke="#007AFF" strokeWidth={2} strokeDasharray="5, 5" />
+                </Svg>
+                <CalibrationHandle position={point1} liveOffset={liveOffset1} isDragging={isDragging1} />
+                <CalibrationHandle position={point2} liveOffset={liveOffset2} isDragging={isDragging2} />
+              </>
+            )}
           </View>
+        </GestureDetector>
+
+        <GlassPanel>
+          <View style={styles.panelContent}>
+            <View style={styles.instructionRow}>
+              <Ionicons name="hand-left-outline" size={20} color="#007AFF" />
+              <Text style={styles.instructionText}>Drag the pins to mark a known distance.</Text>
+            </View>
+            <View style={styles.instructionRow}>
+              <Ionicons name="move-outline" size={20} color="#007AFF" />
+              <Text style={styles.instructionText}>Enter the real-world length below.</Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.inputRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="resize-outline" size={20} color="#3c3c43" />
+                <Text style={styles.inputLabel}>Reference Length</Text>
+              </View>
+              <View style={styles.inputWrapper}>
+                <TextInput value={referenceLength} onChangeText={setReferenceLength} keyboardType="decimal-pad" style={styles.textInput} />
+                <Text style={styles.unitText}>meters</Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={calculateAndProceed} style={styles.confirmButton}>
+              <Text style={styles.confirmButtonText}>Start Analysis</Text>
+            </TouchableOpacity>
+          </View>
+        </GlassPanel>
+      </ImageBackground>
+      <Modal visible={showInfoSheet} animationType="slide" onRequestClose={() => setShowInfoSheet(false)}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 20, fontWeight: 'bold' }}>Calibration Info</Text>
+          <Text style={{ textAlign: 'center', padding: 20 }}>Detailed instructions about how to properly calibrate would go here.</Text>
+          <TouchableOpacity onPress={() => setShowInfoSheet(false)} style={styles.confirmButton}>
+            <Text style={styles.confirmButtonText}>Done</Text>
+          </TouchableOpacity>
         </View>
-      </View>
-    </SafeAreaView>
+      </Modal>
+    </GestureHandlerRootView>
   );
 }
 
+// --- Styles ---
 const styles = StyleSheet.create({
-  root: { 
-    flex: 1, 
-    backgroundColor: '#000' 
-  },
-  header: {
+  root: { flex: 1 },
+  topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#000',
-    zIndex: 10,
-    elevation: 10,
+    paddingHorizontal: 10,
+    height: 44,
+    backgroundColor: 'rgba(248, 248, 248, 0.85)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(60, 60, 67, 0.29)',
   },
-  title: { 
-    color: '#fff', 
-    fontSize: 20, 
-    fontWeight: 'bold',
-    flex: 1,
-    textAlign: 'center'
+  topBarButton: { padding: 8, minWidth: 70, alignItems: 'center' },
+  topBarButtonText: { color: '#007AFF', fontSize: 17 },
+  topBarTitle: { fontSize: 17, fontWeight: '600' },
+  videoContainer: { flex: 1, backgroundColor: 'transparent' }, // MODIFIED: Changed from #000
+  video: { ...StyleSheet.absoluteFillObject },
+  handleContainer: {
+    width: 80,
+    height: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ translateX: -40 }, { translateY: -40 }],
   },
-  analyzeButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  analyzeText: { 
-    color: '#fff', 
-    fontSize: 16, 
-    fontWeight: '600' 
-  },
-  container: { 
-    flex: 1, 
-    padding: 16, 
-    paddingBottom: 8 
-  },
-  mediaWrap: {
-    flex: 1,
-    backgroundColor: '#111',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  handle: {
+  handleDragIndicator: {
     position: 'absolute',
-    width: HANDLE_DIAMETER,
-    height: HANDLE_DIAMETER,
-    borderRadius: HANDLE_DIAMETER / 2,
-    backgroundColor: 'rgba(255, 0, 0, 0.8)',
-    borderColor: 'white',
-    borderWidth: 3,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+  },
+  handlePin: {
+    width: 24,
+    height: 32,
+    alignItems: 'center',
+    transform: [{ translateY: -16 }],
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.3,
     shadowRadius: 4,
-    elevation: 8,
   },
-  panel: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    backgroundColor: 'rgba(28, 28, 30, 0.95)',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+  handlePinDot: {
+    position: 'absolute',
+    top: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'white',
   },
-  instructionRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 12,
-    marginBottom: 20
-  },
-  instructionIcon: { 
-    fontSize: 20 
-  },
-  instructionText: { 
-    color: 'rgba(255,255,255,0.8)', 
-    fontSize: 16, 
-    flex: 1 
-  },
-  inputRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between'
-  },
-  inputLabel: { 
-    color: 'white', 
-    fontSize: 16, 
-    fontWeight: '500' 
-  },
-  inputRight: { 
-    flexDirection: 'row', 
-    alignItems: 'center'
-  },
-  textInput: {
-    color: 'white',
-    fontSize: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 8,
-    width: 100,
-    textAlign: 'center',
+  handlePinCenterDot: {
+    position: 'absolute',
+    top: 16,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(0,0,0,0.5)',
   },
-  unit: { 
-    color: 'rgba(255,255,255,0.7)', 
-    marginLeft: 12,
-    fontSize: 16
+  glassPanel: { borderRadius: 35, overflow: 'hidden', margin: 16 },
+  glassPanelAndroid: {
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 35,
+    margin: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
   },
+  panelContent: { padding: 30, gap: 16 },
+  instructionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  instructionText: { fontSize: 16, color: '#3c3c43', flex: 1, lineHeight: 22 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(60, 60, 67, 0.29)', marginVertical: 4 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  inputLabel: { fontSize: 17, fontWeight: '500' },
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  textInput: {
+    backgroundColor: 'rgba(118, 118, 128, 0.12)',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    width: 80,
+    textAlign: 'center',
+    fontSize: 17,
+  },
+  unitText: { fontSize: 17, color: '#3c3c43' },
+  confirmButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  confirmButtonText: { color: 'white', fontSize: 17, fontWeight: '600' },
 });
