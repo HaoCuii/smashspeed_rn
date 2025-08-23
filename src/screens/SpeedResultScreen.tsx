@@ -15,12 +15,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Share from 'react-native-share';
-import auth from '@react-native-firebase/auth';
 import { getFirestore, collection, addDoc, serverTimestamp } from '@react-native-firebase/firestore';
-import storage from '@react-native-firebase/storage';
+// Updated storage import - use modular API
+import { getStorage, ref, uploadBytes, getDownloadURL } from '@react-native-firebase/storage';
 import { trim } from 'react-native-video-trim';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system'; // Assuming you have this library for file management
 
+import { getApp } from '@react-native-firebase/app';
+import { getAuth } from '@react-native-firebase/auth';
+
+const app = getApp();
+
+const auth = getAuth(app);
 // Optional dependencies
 let BlurView: any;
 try {
@@ -106,7 +112,12 @@ export default function SpeedResultScreen({ route, navigation }: any) {
   useEffect(() => {
     const saveResult = async () => {
       console.log('Starting save process...');
-      const user = auth().currentUser;
+      
+      // Use modular API for Auth
+      const app = getApp();
+      const auth = getAuth(app);
+      const user = auth.currentUser;
+      
       console.log('Current user:', user ? 'Logged in' : 'Not logged in');
       
       if (!user) {
@@ -138,11 +149,25 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
         const filename = `${timestamp}.mp4`;
         console.log('Uploading to storage:', filename);
-        const storageRef = storage().ref(`videos/${uid}/${filename}`);
-        await storageRef.putFile(resultPath);
-        const videoURL = await storageRef.getDownloadURL();
+        
+        const storage = getStorage();
+        const storageRef = ref(storage, `videos/${uid}/${filename}`);
+        
+        // Read the local file as a base64 string
+        console.log('Reading local file as Base64:', resultPath);
+        const base64Video = await FileSystem.readAsStringAsync(resultPath, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        
+        // Use uploadString to upload the base64 content
+        // Specify 'data_url' format as the base64 string is usually preceded by 'data:video/mp4;base64,'
+        // However, FileSystem.readAsStringAsync just returns the base64 data, so 'base64' is appropriate.
+        await uploadString(storageRef, base64Video, 'base64');
+        
+        const videoURL = await getDownloadURL(storageRef);
         console.log('Video uploaded, URL:', videoURL);
 
+        // Clean up the local file after upload
         await FileSystem.deleteAsync(resultPath).catch(console.warn);
 
         const detectionData = {
@@ -170,7 +195,9 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       saveResult();
     } else {
       // Check if user is logged in even without video
-      const user = auth().currentUser;
+      const app = getApp();
+      const auth = getAuth(app);
+      const user = auth.currentUser;
       if (!user) {
         console.log('No video data and not logged in');
         setSaveStatus('not_logged_in');
