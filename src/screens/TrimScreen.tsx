@@ -205,8 +205,8 @@ const TrimScreen: React.FC = () => {
 
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={styles.header}>
-              <Text style={styles.title}>Trim Video</Text>
-              <Text style={styles.description}>Isolate the moment of impact for the most accurate analysis.</Text>
+              <Text style={styles.title}>Trim to the Smash</Text>
+              <Text style={styles.description}>Isolate the moment of impact. The final clip should be very short (~0.25 seconds), and the birdie should be clearly visible in each frame.</Text>
             </View>
 
             <View style={styles.videoWrapper}>
@@ -244,7 +244,7 @@ const TrimScreen: React.FC = () => {
               </View>
               <View style={styles.timeLabelContainer}>
                 <Text style={styles.timeLabel}>{formatTime(startSec)}</Text>
-                <Text style={[styles.timeLabel, styles.durationLabel]}>{formatTime(endSec - startSec)}</Text>
+                <Text style={[styles.timeLabel, styles.durationLabel]}>Selected Duration: {formatTime(endSec - startSec)}</Text>
                 <Text style={styles.timeLabel}>{formatTime(endSec)}</Text>
               </View>
             </View>
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
       color: '#1c1c1e',
     },
     description: {
-      fontSize: 16,
+      fontSize: 14,
       color: '#6c6c70',
       textAlign: 'center',
       marginTop: 8,
@@ -354,7 +354,7 @@ const styles = StyleSheet.create({
     },
     timeLabel: { 
       color: '#3c3c43', 
-      fontSize: 14,
+      fontSize: 12,
       fontWeight: '500',
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },

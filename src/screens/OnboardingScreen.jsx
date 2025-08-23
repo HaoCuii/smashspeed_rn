@@ -1,7 +1,7 @@
 import React from 'react';
 import {
     View, Text, Image, FlatList, Dimensions, StyleSheet, TouchableOpacity,
-    Animated, ScrollView, StatusBar, Platform, ImageBackground // 1. Import ImageBackground
+    Animated, ScrollView, StatusBar, Platform, ImageBackground
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -87,7 +87,7 @@ const slides = [
 ];
 
 //================================================================================
-// Reusable UI Components (BackgroundGradient is removed)
+// Reusable UI Components
 //================================================================================
 
 const GlassPanel = ({ children, style }) => {
@@ -109,7 +109,7 @@ const IconComponent = ({ icon, iconSet, size = 24, color = '#007AFF' }) => {
 };
 
 //================================================================================
-// Onboarding Screen Components (no changes needed here)
+// Onboarding Screen Components
 //================================================================================
 
 function WelcomeSlide({ currentSlide, slideIndex }) {
@@ -268,7 +268,6 @@ export default function Onboarding({ onComplete }) {
     return (
         <>
             <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-            {/* 2. Replace View and BackgroundGradient with a single ImageBackground */}
             <ImageBackground
                 source={require('../../assets/aurora_background.png')}
                 style={styles.container}
@@ -300,10 +299,14 @@ export default function Onboarding({ onComplete }) {
 //================================================================================
 
 const styles = StyleSheet.create({
-    // 3. Update container style and remove old background styles
-    container: { flex: 1 },
+    // MODIFICATION: Added border radius and overflow
+    container: {
+        flex: 1,
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        overflow: 'hidden',
+    },
     slide: { width: width, flex: 1 },
-    // backgroundCircle1 and backgroundCircle2 are removed
     glassPanel: { borderRadius: 35, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 1)' },
     glassPanelAndroid: { backgroundColor: 'rgba(255, 255, 255, 1)', borderRadius: 35, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.1, shadowRadius: 15 },
     welcomeContent: { flex: 1, justifyContent: 'center', paddingHorizontal: 20 },

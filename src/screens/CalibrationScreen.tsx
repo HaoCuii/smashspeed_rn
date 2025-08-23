@@ -78,7 +78,6 @@ const CalibrationHandle = ({ position, liveOffset, isDragging }: { position: Sha
             />
           </Svg>
           <View style={styles.handlePinDot} />
-          <View style={styles.handlePinCenterDot} />
         </View>
       </View>
     </Animated.View>
@@ -234,11 +233,11 @@ export default function CalibrationScreen() {
           <View style={styles.panelContent}>
             <View style={styles.instructionRow}>
               <Ionicons name="hand-left-outline" size={20} color="#007AFF" />
-              <Text style={styles.instructionText}>Drag the pins to mark a known distance.</Text>
+              <Text style={styles.instructionText}>Place one point on the front service line and the other on the doubles long service (flick) line.</Text>
             </View>
             <View style={styles.instructionRow}>
               <Ionicons name="move-outline" size={20} color="#007AFF" />
-              <Text style={styles.instructionText}>Enter the real-world length below.</Text>
+              <Text style={styles.instructionText}>Tip: Drag from the area around a point to avoid covering it with your finger</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.inputRow}>

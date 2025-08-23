@@ -21,6 +21,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-na
 import Slider from '@react-native-community/slider';
 import HapticFeedback, { HapticFeedbackTypes } from 'react-native-haptic-feedback';
 import { HapticFeedbackTypes as HapticConstants } from 'react-native-haptic-feedback';
+import Ionicons from 'react-native-vector-icons/Ionicons'; // MODIFICATION: Import icons
 
 // --- Type Definitions ---
 type AnalyzeParams = {
@@ -67,7 +68,7 @@ const RepeatingFineTuneButton = ({
   icon,
   onPress,
 }: {
-  icon: string;
+  icon: React.ReactNode; // MODIFICATION: Changed from string to ReactNode
   onPress: (pressCount: number) => void;
 }) => {
   const [isPressing, setIsPressing] = useState(false);
@@ -99,7 +100,7 @@ const RepeatingFineTuneButton = ({
       onPressOut={() => { setIsPressing(false); stopTimer(); }}
       style={[styles.fineTuneBtn, isPressing && styles.fineTuneBtnActive]}
     >
-      <Text style={styles.fineTuneBtnTxt}>{icon}</Text>
+      {icon}
     </TouchableOpacity>
   );
 };
@@ -133,7 +134,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const [userBoxesByIndex, setUserBoxesByIndex] = useState<Record<number, VBox[]>>({});
   const [selected, setSelected] = useState<Selected | null>(null);
-  const [showTuningControls, setShowTuningControls] = useState(true);
+  const [showTuningControls, setShowTuningControls] = useState(false); // MODIFICATION: Closed by default
   const [editMode, setEditMode] = useState<EditMode>('move');
 
   const [undoStack, setUndoStack] = useState<UndoState[]>([]);
@@ -320,11 +321,6 @@ export default function AnalyzeScreen({ route, navigation }: any) {
     return best.maxKph === -Infinity ? null : best;
   }, [speedsKph]);
 
-  /**
-   * ## Finish Button Action - UPDATED
-   * This function now navigates to the 'SpeedResult' screen instead of showing a modal.
-   * It passes all the necessary data for the result screen to display.
-   */
   const finish = () => {
     triggerHaptic('heavy');
   
@@ -332,13 +328,12 @@ export default function AnalyzeScreen({ route, navigation }: any) {
       ? { maxKph: maxSpeed.maxKph, atIndex: maxSpeed.atIndex }
       : { maxKph: 0, atIndex: -1 };
   
-    // Navigate to the SpeedResult screen with all relevant data
     navigation.navigate('SpeedResult', {
       ...resultData,
       sourceUri,
       startSec,
       endSec,
-      frames, // Pass frame data in case the result screen needs to show the video
+      frames,
     });
   };
 
@@ -486,14 +481,14 @@ export default function AnalyzeScreen({ route, navigation }: any) {
           <View style={styles.topBarContainer}>
             <View style={styles.topBar}>
               <View style={styles.topBarSection}>
-                <TouchableOpacity onPress={undo} disabled={undoStack.length === 0} style={undoStack.length === 0 && styles.btnDisabled}><Text style={styles.iconBtnTxt}>↩︎</Text></TouchableOpacity>
-                <TouchableOpacity onPress={redo} disabled={redoStack.length === 0} style={redoStack.length === 0 && styles.btnDisabled}><Text style={styles.iconBtnTxt}>↪︎</Text></TouchableOpacity>
+                <TouchableOpacity onPress={undo} disabled={undoStack.length === 0} style={undoStack.length === 0 && styles.btnDisabled}><Ionicons name="arrow-undo-outline" style={styles.iconBtn} /></TouchableOpacity>
+                <TouchableOpacity onPress={redo} disabled={redoStack.length === 0} style={redoStack.length === 0 && styles.btnDisabled}><Ionicons name="arrow-redo-outline" style={styles.iconBtn} /></TouchableOpacity>
               </View>
               <Text style={styles.topBarTitle}>{frames.length ? `Frame ${currentIndex + 1} / ${frames.length}` : 'Loading...'}</Text>
               <View style={[styles.topBarSection, { justifyContent: 'flex-end' }]}>
-                <TouchableOpacity onPress={() => { scale.value = withTiming(Math.min(scale.value * 1.5, 5)); savedScale.value = scale.value; }}><Text style={styles.iconBtnTxt}>⊕</Text></TouchableOpacity>
-                <TouchableOpacity onPress={() => { scale.value = withTiming(Math.max(scale.value * 0.66, 1)); savedScale.value = scale.value; }}><Text style={styles.iconBtnTxt}>⊖</Text></TouchableOpacity>
-                <TouchableOpacity onPress={resetZoom}><Text style={[styles.iconBtnTxt, { fontSize: 18 }]}>⇱</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => { scale.value = withTiming(Math.min(scale.value * 1.5, 5)); savedScale.value = scale.value; }}><Ionicons name="add-circle-outline" style={styles.iconBtn} /></TouchableOpacity>
+                <TouchableOpacity onPress={() => { scale.value = withTiming(Math.max(scale.value * 0.66, 1)); savedScale.value = scale.value; }}><Ionicons name="remove-circle-outline" style={styles.iconBtn} /></TouchableOpacity>
+                <TouchableOpacity onPress={resetZoom}><Ionicons name="scan-outline" style={styles.iconBtn} /></TouchableOpacity>
               </View>
             </View>
           </View>
@@ -518,7 +513,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
             <View style={styles.interpContainer}>
               <View style={styles.interpContent}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                  <Text style={{ fontSize: 24 }}>⚠️</Text>
+                  <Ionicons name="sparkles-outline" size={24} color="#BF5A00" />
                   <View>
                     <Text style={styles.interpTitle}>Detection Gap Found</Text>
                     <Text style={styles.interpSub}>Interpolation can improve accuracy.</Text>
@@ -536,7 +531,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                   <Text style={styles.speedLabel}>Speed</Text>
                   <TouchableOpacity onPress={() => Alert.alert('Speed Calculation', 'Speed is estimated based on the change in the object\'s center point between frames.')}>
-                    <Text style={styles.infoIcon}>ⓘ</Text>
+                    <Ionicons name="information-circle-outline" style={styles.infoIcon} />
                   </TouchableOpacity>
                 </View>
                 <Text style={styles.speedValue}>{speedLabel} <Text style={styles.speedUnit}>{speedUnit}</Text></Text>
@@ -544,17 +539,20 @@ export default function AnalyzeScreen({ route, navigation }: any) {
 
               <View style={styles.sliderRow}>
                 <GlowButton onPress={() => seekToIndex(currentIndex - 1)} disabled={currentIndex <= 0}>
-                  <Text style={styles.navArrow}>◀︎</Text>
+                  <Ionicons name="chevron-back-circle" style={[styles.navArrowIcon, currentIndex <= 0 && styles.btnDisabled]} />
                 </GlowButton>
                 <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={Math.max(0, frames.length - 1)} step={1} value={currentIndex} onValueChange={() => triggerHaptic('light')} onSlidingComplete={val => seekToIndex(val)} minimumTrackTintColor="#007AFF" maximumTrackTintColor="#D1D1D6" thumbTintColor="#000" />
                 <GlowButton onPress={() => seekToIndex(currentIndex + 1)} disabled={currentIndex >= frames.length - 1}>
-                  <Text style={styles.navArrow}>▶︎</Text>
+                  <Ionicons name="chevron-forward-circle" style={[styles.navArrowIcon, currentIndex >= frames.length - 1 && styles.btnDisabled]} />
                 </GlowButton>
               </View>
 
               <View style={styles.divider} />
               <TouchableOpacity onPress={() => setShowTuningControls(s => !s)} style={styles.toggleBtn}>
-                <Text style={styles.toggleBtnText}>{showTuningControls ? 'Hide Manual Controls ▴' : 'Show Manual Controls ▾'}</Text>
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 5}}>
+                  <Text style={styles.toggleBtnText}>{showTuningControls ? 'Hide Manual Controls' : 'Show Manual Controls'}</Text>
+                  <Ionicons name={showTuningControls ? 'chevron-up' : 'chevron-down'} size={16} color={'#6D6D72'} />
+                </View>
               </TouchableOpacity>
               {!showTuningControls && <Text style={styles.aiWarning}>Manual controls are hidden. AI detections are being used.</Text>}
             </View>
@@ -564,23 +562,47 @@ export default function AnalyzeScreen({ route, navigation }: any) {
                 <View style={styles.manualHeader}>
                   <Text style={styles.sectionHeader}>MANUAL FINE-TUNING</Text>
                   <TouchableOpacity onPress={() => Alert.alert('Manual Adjustments', 'Add, remove, or edit bounding boxes. Hold adjustment buttons to accelerate changes.')}>
-                    <Text style={styles.infoIcon}>ⓘ</Text>
+                    <Ionicons name="information-circle-outline" style={styles.infoIcon} />
                   </TouchableOpacity>
                 </View>
 
                 {!userVideoBoxes.length && !detectedVideoBoxes.length ? (
-                  <TouchableOpacity style={[styles.actionBtn, styles.addBtn]} onPress={addBox}><Text style={styles.actionBtnTxt}>＋ Add Box</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.actionBtn, styles.addBtn]} onPress={addBox}>
+                    <View style={styles.actionBtnContent}>
+                      <Ionicons name="add-circle" size={22} color="#FFF" />
+                      <Text style={styles.actionBtnTxt}>Add Box</Text>
+                    </View>
+                  </TouchableOpacity>
                 ) : (
                   <>
-                    <TouchableOpacity style={[styles.actionBtn, styles.removeBtn]} onPress={deleteSelected} disabled={!selected}><Text style={styles.actionBtnTxt}>✕ Remove Selected</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.actionBtn, styles.removeBtn, !selected && styles.btnDisabled]} onPress={deleteSelected} disabled={!selected}>
+                      <View style={styles.actionBtnContent}>
+                        <Ionicons name="remove-circle" size={22} color="#FFF" />
+                        <Text style={styles.actionBtnTxt}>Remove Selected</Text>
+                      </View>
+                    </TouchableOpacity>
                     <View style={styles.segmentedControl}>
                       <TouchableOpacity style={[styles.segment, editMode === 'move' && styles.segmentActive]} onPress={() => setEditMode('move')}><Text style={styles.segmentText}>Move</Text></TouchableOpacity>
                       <TouchableOpacity style={[styles.segment, editMode === 'resize' && styles.segmentActive]} onPress={() => setEditMode('resize')}><Text style={styles.segmentText}>Resize</Text></TouchableOpacity>
                     </View>
                     {editMode === 'move' ? (
-                      <View style={styles.dPad}><RepeatingFineTuneButton icon="↑" onPress={(c) => adjustBox(0, -1, 0, 0, c)} /><View style={{ flexDirection: 'row', gap: 70 }}><RepeatingFineTuneButton icon="←" onPress={(c) => adjustBox(-1, 0, 0, 0, c)} /><RepeatingFineTuneButton icon="→" onPress={(c) => adjustBox(1, 0, 0, 0, c)} /></View><RepeatingFineTuneButton icon="↓" onPress={(c) => adjustBox(0, 1, 0, 0, c)} /></View>
+                      <View style={styles.dPad}>
+                        <RepeatingFineTuneButton icon={<Ionicons name="arrow-up" size={28} color="#000" />} onPress={(c) => adjustBox(0, -1, 0, 0, c)} />
+                        <View style={{ flexDirection: 'row', gap: 70 }}>
+                          <RepeatingFineTuneButton icon={<Ionicons name="arrow-back" size={28} color="#000" />} onPress={(c) => adjustBox(-1, 0, 0, 0, c)} />
+                          <RepeatingFineTuneButton icon={<Ionicons name="arrow-forward" size={28} color="#000" />} onPress={(c) => adjustBox(1, 0, 0, 0, c)} />
+                        </View>
+                        <RepeatingFineTuneButton icon={<Ionicons name="arrow-down" size={28} color="#000" />} onPress={(c) => adjustBox(0, 1, 0, 0, c)} />
+                      </View>
                     ) : (
-                      <View style={styles.resizeControls}><Text style={styles.resizeLabel}>Width</Text><RepeatingFineTuneButton icon="−" onPress={(c) => adjustBox(0, 0, -1, 0, c)} /><RepeatingFineTuneButton icon="+" onPress={(c) => adjustBox(0, 0, 1, 0, c)} /><Text style={styles.resizeLabel}>Height</Text><RepeatingFineTuneButton icon="−" onPress={(c) => adjustBox(0, 0, 0, -1, c)} /><RepeatingFineTuneButton icon="+" onPress={(c) => adjustBox(0, 0, 0, 1, c)} /></View>
+                      <View style={styles.resizeControls}>
+                        <Text style={styles.resizeLabel}>Width</Text>
+                        <RepeatingFineTuneButton icon={<Ionicons name="remove" size={28} color="#000" />} onPress={(c) => adjustBox(0, 0, -1, 0, c)} />
+                        <RepeatingFineTuneButton icon={<Ionicons name="add" size={28} color="#000" />} onPress={(c) => adjustBox(0, 0, 1, 0, c)} />
+                        <Text style={styles.resizeLabel}>Height</Text>
+                        <RepeatingFineTuneButton icon={<Ionicons name="remove" size={28} color="#000" />} onPress={(c) => adjustBox(0, 0, 0, -1, c)} />
+                        <RepeatingFineTuneButton icon={<Ionicons name="add" size={28} color="#000" />} onPress={(c) => adjustBox(0, 0, 0, 1, c)} />
+                      </View>
                     )}
                   </>
                 )}
@@ -612,7 +634,7 @@ const styles = StyleSheet.create({
   topBarContainer: { height: 44, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderColor: '#D1D1D6' },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, flex: 1 },
   topBarSection: { flexDirection: 'row', alignItems: 'center', gap: 20, flex: 1 },
-  iconBtnTxt: { color: '#007AFF', fontSize: 24, fontWeight: '500' },
+  iconBtn: { color: '#007AFF', fontSize: 26 }, // MODIFICATION: New icon style
   topBarTitle: { color: '#000', fontSize: 17, fontWeight: '600' },
   // Video & Boxes
   videoContainer: { width: '100%', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' },
@@ -643,11 +665,11 @@ const styles = StyleSheet.create({
   // Navigation Panel
   speedReadout: { alignItems: 'center', marginBottom: 10 },
   speedLabel: { color: '#6D6D72', fontSize: 13, fontWeight: '500' },
-  infoIcon: { color: '#007AFF', fontSize: 15 },
+  infoIcon: { color: '#007AFF', fontSize: 18 }, // MODIFICATION: Adjusted size
   speedValue: { color: '#000', fontSize: 28, fontWeight: '700' },
   speedUnit: { fontSize: 20, color: '#6D6D72' },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  navArrow: { color: '#007AFF', fontSize: 36, fontWeight: '300', paddingHorizontal: 10 },
+  navArrowIcon: { color: '#007AFF', fontSize: 40 }, // MODIFICATION: New icon style
   glowEffect: { shadowColor: '#007AFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   divider: { height: 1, backgroundColor: '#E5E5EA', marginVertical: 12 },
   toggleBtn: { paddingVertical: 4, alignItems: 'center' },
@@ -656,6 +678,7 @@ const styles = StyleSheet.create({
   // Manual Panel
   manualHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   actionBtn: { paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
+  actionBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 }, // MODIFICATION: New style for button content
   addBtn: { backgroundColor: '#007AFF' },
   removeBtn: { backgroundColor: '#FF9500' },
   actionBtnTxt: { color: '#FFF', fontWeight: '600', fontSize: 16 },
@@ -668,7 +691,6 @@ const styles = StyleSheet.create({
   resizeLabel: { color: '#000', fontWeight: '600', width: 60, textAlign: 'center' },
   fineTuneBtn: { width: 64, height: 48, backgroundColor: '#E5E5EA', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   fineTuneBtnActive: { backgroundColor: '#D1D1D6' },
-  fineTuneBtnTxt: { color: '#000', fontSize: 24, fontWeight: '500' },
   // Bottom Bar
   bottomBarContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingBottom: 34, paddingTop: 12, paddingHorizontal: 16, gap: 14, borderTopWidth: 1, borderColor: '#D1D1D6', backgroundColor: '#FFFFFF' },
   finishBtn: { backgroundColor: '#007AFF', paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
