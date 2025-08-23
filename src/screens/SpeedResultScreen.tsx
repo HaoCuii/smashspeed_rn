@@ -6,6 +6,11 @@ import {
   StyleSheet,
   Animated,
   Easing,
+  Platform,
+  Alert,
+  ImageBackground,
+  useWindowDimensions,
+  ActivityIndicator,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -33,6 +38,17 @@ export default function SpeedResultScreen({ navigation }: any) {
   const hasAnimated = useRef(false);
 
   useEffect(() => {
+    if (animOnce.current) return;
+    animOnce.current = true;
+    setTimeout(() => {
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 1500,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+    }, 250);
+  }, [anim]);
     if (!hasAnimated.current) {
       hasAnimated.current = true;
       setTimeout(() => {
@@ -117,6 +133,24 @@ export default function SpeedResultScreen({ navigation }: any) {
   }, [maxKph, angle, videoUri, startSec, endSec]);
 
   return (
+    <ImageBackground
+      source={require('../../assets/aurora_background.png')}
+      style={styles.bg}
+      imageStyle={styles.bgImage}
+    >
+      <SafeAreaView style={styles.safeArea}>
+        {/* Top bar */}
+        <View style={styles.topBar}>
+          <View style={{ width: 44 }} />
+          <TouchableOpacity onPress={onShare} style={styles.iconBtn} disabled={isSharing}>
+            {isSharing ? (
+              <ActivityIndicator size="small" color="#007AFF" />
+            ) : (
+              <Ionicons name="share-outline" size={22} color="#007AFF" />
+            )}
+          </TouchableOpacity>
+        </View>
+
     <View style={styles.container}>
       <LinearGradient colors={['rgba(0, 122, 255, 0.1)', 'rgba(0, 122, 255, 0.05)', 'transparent']} style={styles.backgroundGradient} />
       <View style={[styles.floatingCircle, styles.circle1]} />
@@ -135,6 +169,9 @@ export default function SpeedResultScreen({ navigation }: any) {
           <View style={styles.statusWrapper}>{renderSaveStatus()}</View>
         </View>
         <View style={styles.footer}>
+          <TouchableOpacity onPress={goAnalyzeAnother} style={styles.secondaryBtn}>
+            <Ionicons name="arrow-undo-circle" size={20} color="#007AFF" />
+            <Text style={styles.secondaryBtnText}>Analyze Another</Text>
           <TouchableOpacity onPress={goHome} style={styles.primaryButton}>
             <Feather name="home" size={20} color="white" />
             <Text style={styles.primaryButtonText}>New Analysis</Text>
@@ -196,22 +233,24 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+    paddingHorizontal: 20,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   speedDisplay: {
     alignItems: 'center',
-    marginBottom: 40,
+  },
+  cardSubtitle: {
+    fontSize: 18,
+    color: '#6B7280',
+    marginBottom: 8,
   },
   speedNumber: {
-    fontSize: 100,
     fontWeight: '800',
     color: '#007AFF',
-    lineHeight: 100,
   },
   speedUnit: {
-    fontSize: 24,
     fontWeight: '600',
     color: '#666',
     marginTop: 8,
@@ -258,19 +297,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 15,
-    borderRadius: 10,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
   },
-  primaryButtonText: {
-    color: 'white',
+  secondaryBtnText: {
+    color: '#007AFF',
+    fontWeight: '700',
     fontSize: 16,
-    fontWeight: '600',
     marginLeft: 8,
   },
 });

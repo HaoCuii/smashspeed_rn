@@ -1,6 +1,6 @@
 // App.tsx
 import React, { useState } from 'react';
-import { View, Text } from 'react-native';
+import { Text } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -18,19 +18,52 @@ import AccountScreen from './src/screens/AccountScreen';
 import SpeedResultScreen from './src/screens/SpeedResultScreen';
 
 // ---------- Route types ----------
-export type RootStackParamList = {
-  Tabs: undefined;
+export type DetectStackParamList = {
+  Detect: undefined;
   Trim: { sourceUri: string; duration: number };
   Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
   Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number };
   SpeedResult: { maxKph: number; angle: number; videoUri: string; startSec: number; endSec: number };
 };
 
-// --- Navigators ---
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const DetectStack = createNativeStackNavigator<DetectStackParamList>();
+const ResultsStack = createNativeStackNavigator();
+const AccountStack = createNativeStackNavigator();
 
-const MainTabs = () => {
+// ----- Stacks INSIDE each tab -----
+function DetectStackNavigator() {
+  return (
+    <DetectStack.Navigator screenOptions={{ headerShown: false }}>
+      <DetectStack.Screen name="Detect" component={DetectScreen} />
+      <DetectStack.Screen name="Trim" component={TrimScreen} />
+      <DetectStack.Screen name="Calibration" component={CalibrationScreen} />
+      <DetectStack.Screen name="Analyze" component={AnalyzeScreen} />
+      <DetectStack.Screen name="SpeedResult" component={SpeedResultScreen} />
+    </DetectStack.Navigator>
+  );
+}
+
+function ResultsStackNavigator() {
+  return (
+    <ResultsStack.Navigator screenOptions={{ headerShown: false }}>
+      <ResultsStack.Screen name="ResultsRoot" component={ResultsScreen} />
+      {/* Add more results-related screens here if you have them */}
+    </ResultsStack.Navigator>
+  );
+}
+
+function AccountStackNavigator() {
+  return (
+    <AccountStack.Navigator screenOptions={{ headerShown: false }}>
+      <AccountStack.Screen name="AccountRoot" component={AccountScreen} />
+      {/* Add more account-related screens here if needed */}
+    </AccountStack.Navigator>
+  );
+}
+
+// ----- Tabs are the ROOT -----
+function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -43,76 +76,36 @@ const MainTabs = () => {
           height: 70,
           paddingBottom: 10,
         },
-        tabBarLabel: ({ color }) => (
-          <Text style={{ color, fontSize: 10 }}>{route.name}</Text>
-        ),
+        tabBarLabel: ({ color }) => <Text style={{ color, fontSize: 10 }}>{route.name}</Text>,
         tabBarIcon: ({ focused, color }) => {
           let iconName = '';
-          if (route.name === 'Detect')
-            iconName = focused ? 'scan' : 'scan-outline';
-          else if (route.name === 'Results')
-            iconName = focused ? 'bar-chart' : 'bar-chart-outline';
-          else if (route.name === 'Account')
-            iconName = focused ? 'person' : 'person-outline';
+          if (route.name === 'Detect') iconName = focused ? 'scan' : 'scan-outline';
+          else if (route.name === 'Results') iconName = focused ? 'bar-chart' : 'bar-chart-outline';
+          else if (route.name === 'Account') iconName = focused ? 'person' : 'person-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
       })}
     >
-      <Tab.Screen name="Detect" component={DetectScreen} />
-      <Tab.Screen name="Results" component={ResultsScreen} />
-      <Tab.Screen name="Account" component={AccountScreen} />
+      <Tab.Screen name="Detect" component={DetectStackNavigator} />
+      <Tab.Screen name="Results" component={ResultsStackNavigator} />
+      <Tab.Screen name="Account" component={AccountStackNavigator} />
     </Tab.Navigator>
   );
-};
-
-const RootNavigator = () => {
-  return (
-    <Stack.Navigator>
-      <Stack.Screen
-        name="Tabs"
-        component={MainTabs}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="Trim"
-        component={TrimScreen}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="Calibration"
-        component={CalibrationScreen}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="Analyze"
-        component={AnalyzeScreen}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="SpeedResult"
-        component={SpeedResultScreen}
-        options={{ headerShown: false }}
-      />
-    </Stack.Navigator>
-  );
-};
+}
 
 // --- Main App Component ---
 const App = () => {
   const [showOnboarding, setShowOnboarding] = useState(true);
 
-  const handleOnboardingComplete = () => {
-    setShowOnboarding(false);
-  };
-
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
         {showOnboarding ? (
-          <OnboardingScreen onComplete={handleOnboardingComplete} />
+          <OnboardingScreen onComplete={() => setShowOnboarding(false)} />
         ) : (
           <NavigationContainer>
-            <RootNavigator />
+            {/* Tabs are root -> tab bar stays visible everywhere */}
+            <MainTabs />
           </NavigationContainer>
         )}
       </GestureHandlerRootView>
