@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 
+// Screens
 import DetectScreen from './src/screens/DetectScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import TrimScreen from './src/screens/TrimScreen';
@@ -19,7 +20,7 @@ import SpeedResultScreen from './src/screens/SpeedResultScreen';
 
 // ---------- Route types ----------
 export type DetectStackParamList = {
-  Detect: undefined;
+  DetectRoot: undefined;
   Trim: { sourceUri: string; duration: number };
   Calibration: { sourceUri: string; duration: number; startSec: number; endSec: number };
   Analyze: { sourceUri: string; startSec: number; endSec: number; metersPerPixel: number };
@@ -31,11 +32,12 @@ const DetectStack = createNativeStackNavigator<DetectStackParamList>();
 const ResultsStack = createNativeStackNavigator();
 const AccountStack = createNativeStackNavigator();
 
-// ----- Stacks INSIDE each tab -----
+/* ---------------- Stacks ---------------- */
+
 function DetectStackNavigator() {
   return (
     <DetectStack.Navigator screenOptions={{ headerShown: false }}>
-      <DetectStack.Screen name="Detect" component={DetectScreen} />
+      <DetectStack.Screen name="DetectRoot" component={DetectScreen} />
       <DetectStack.Screen name="Trim" component={TrimScreen} />
       <DetectStack.Screen name="Calibration" component={CalibrationScreen} />
       <DetectStack.Screen name="Analyze" component={AnalyzeScreen} />
@@ -48,7 +50,6 @@ function ResultsStackNavigator() {
   return (
     <ResultsStack.Navigator screenOptions={{ headerShown: false }}>
       <ResultsStack.Screen name="ResultsRoot" component={ResultsScreen} />
-      {/* Add more results-related screens here if you have them */}
     </ResultsStack.Navigator>
   );
 }
@@ -57,12 +58,12 @@ function AccountStackNavigator() {
   return (
     <AccountStack.Navigator screenOptions={{ headerShown: false }}>
       <AccountStack.Screen name="AccountRoot" component={AccountScreen} />
-      {/* Add more account-related screens here if needed */}
     </AccountStack.Navigator>
   );
 }
 
-// ----- Tabs are the ROOT -----
+/* ---------------- Tabs ---------------- */
+
 function MainTabs() {
   return (
     <Tab.Navigator
@@ -76,7 +77,9 @@ function MainTabs() {
           height: 70,
           paddingBottom: 10,
         },
-        tabBarLabel: ({ color }) => <Text style={{ color, fontSize: 10 }}>{route.name}</Text>,
+        tabBarLabel: ({ color }) => (
+          <Text style={{ color, fontSize: 10 }}>{route.name}</Text>
+        ),
         tabBarIcon: ({ focused, color }) => {
           let iconName = '';
           if (route.name === 'Detect') iconName = focused ? 'scan' : 'scan-outline';
@@ -93,7 +96,8 @@ function MainTabs() {
   );
 }
 
-// --- Main App Component ---
+/* ---------------- Root ---------------- */
+
 const App = () => {
   const [showOnboarding, setShowOnboarding] = useState(true);
 
@@ -104,7 +108,6 @@ const App = () => {
           <OnboardingScreen onComplete={() => setShowOnboarding(false)} />
         ) : (
           <NavigationContainer>
-            {/* Tabs are root -> tab bar stays visible everywhere */}
             <MainTabs />
           </NavigationContainer>
         )}

@@ -312,13 +312,14 @@ export default function AnalyzeScreen({ route, navigation }: any) {
 
   const maxSpeed = useMemo(() => {
     let best = { maxKph: -Infinity, atIndex: -1 };
+  
     for (let i = 0; i < speedsKph.length; i++) {
       const v = speedsKph[i];
       if (Number.isFinite(v as number) && (v as number) > best.maxKph) {
         best = { maxKph: v as number, atIndex: i };
       }
     }
-    
+  
     // Calculate angle at max speed frame
     let angle = 0;
     if (best.atIndex >= 0 && best.atIndex < centers.length - 1) {
@@ -328,29 +329,26 @@ export default function AnalyzeScreen({ route, navigation }: any) {
         const dx = next.x - current.x;
         const dy = next.y - current.y;
         angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        // Normalize to 0-360 degrees
-        if (angle < 0) angle += 360;
+        if (angle < 0) angle += 360; // normalize to 0-360
       }
     }
-    
+  
     return best.maxKph === -Infinity ? null : { ...best, angle };
   }, [speedsKph, centers]);
-
+  
   const finish = () => {
     triggerHaptic('heavy');
   
-    const resultData = maxSpeed
-      ? { maxKph: maxSpeed.maxKph, atIndex: maxSpeed.atIndex }
-      : { maxKph: 0, atIndex: -1 };
-  
     navigation.navigate('SpeedResult', {
-      ...resultData,
-      sourceUri,
+      maxKph: maxSpeed ? maxSpeed.maxKph : 0,
+      angle: maxSpeed ? maxSpeed.angle : 0,
+      videoUri: sourceUri,
       startSec,
       endSec,
-      frames,
     });
   };
+  
+
 
   const clampBox = (b: VBox): VBox => {
     if (!vw || !vh) return b;

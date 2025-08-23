@@ -89,7 +89,7 @@ export default function CalibrationScreen() {
   const navigation = useNavigation();
   const route = useRoute<CalibRoute>();
   const insets = useSafeAreaInsets();
-  const { sourceUri } = route.params;
+  const { sourceUri, startSec, endSec } = route.params;
 
   const [referenceLength, setReferenceLength] = useState('3.87');
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
@@ -195,7 +195,7 @@ export default function CalibrationScreen() {
 
     const metersPerPixel = realLength / pixelDistance;
     // @ts-ignore
-    navigation.navigate('Analyze', { ...route.params, metersPerPixel });
+    navigation.navigate('Analyze', { sourceUri, startSec, endSec, metersPerPixel });
   };
 
   return (
