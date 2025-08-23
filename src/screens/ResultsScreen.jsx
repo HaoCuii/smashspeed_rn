@@ -6,25 +6,27 @@ import {
   TouchableOpacity,
   Alert,
   Dimensions,
-  StyleSheet,
-  FlatList,
-  PanGestureHandler,
-  State as GestureState,
   Modal,
+  StyleSheet,
 } from 'react-native';
-import { BlurView } from '@react-native-community/blur';
 import Video from 'react-native-video';
-import Svg, { Path, Circle, Line, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { LineChart } from 'react-native-chart-kit';
 import Slider from '@react-native-community/slider';
-import firestore from '@react-native-firebase/firestore';
-import auth, { onAuthStateChanged } from '@react-native-firebase/auth';
-import storage from '@react-native-firebase/storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+// Firebase v22 modular imports
+import { getFirestore, collection, doc, query, orderBy, onSnapshot, deleteDoc } from '@react-native-firebase/firestore';
+import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
+import { getStorage, ref as storageRef, deleteObject, getDownloadURL } from '@react-native-firebase/storage';
 
-// MARK: - Helper Types
+const { width: screenWidth } = Dimensions.get('window');
+
+// Initialize Firebase services
+const db = getFirestore();
+const auth = getAuth();
+const storage = getStorage();
+
+// Constants
 const TimeRange = {
   WEEK: { key: 'week', value: 'Week' },
   MONTH: { key: 'month', value: 'Month' },
@@ -41,17 +43,15 @@ const GlassPanel = ({ children, style }) => (
 );
 
 // MARK: - Stat Card Component
-const StatCard = ({ label, value, icon }) => {
-  return (
-    <View style={styles.statCard}>
-      <View style={styles.statIconContainer}>
-        <Icon name={icon} size={20} color="#007AFF" />
-      </View>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+const StatCard = ({ label, value, icon }) => (
+  <View style={styles.statCard}>
+    <View style={styles.statIconContainer}>
+      <Icon name={icon} size={20} color="#007AFF" />
     </View>
-  );
-};
+    <Text style={styles.statValue}>{value}</Text>
+    <Text style={styles.statLabel}>{label}</Text>
+  </View>
+);
 
 // MARK: - History Row Component
 const HistoryRow = ({ result, onDelete, onVideoPress }) => {
@@ -78,6 +78,34 @@ const HistoryRow = ({ result, onDelete, onVideoPress }) => {
     }
   };
 
+  const formatDate = (timestamp) => {
+    if (!timestamp) {
+      return { date: 'Unknown', time: 'Unknown' };
+    }
+    
+    let date;
+    if (timestamp.toDate) {
+      // Firestore Timestamp object
+      date = timestamp.toDate();
+    } else if (timestamp.seconds) {
+      // Legacy timestamp format
+      date = new Date(timestamp.seconds * 1000);
+    } else if (timestamp instanceof Date) {
+      // Already a Date object
+      date = timestamp;
+    } else {
+      // Fallback for other formats
+      date = new Date(timestamp);
+    }
+
+    return {
+      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+    };
+  };
+
+  const { date, time } = formatDate(result.date);
+
   return (
     <TouchableOpacity
       style={styles.historyItem}
@@ -93,25 +121,15 @@ const HistoryRow = ({ result, onDelete, onVideoPress }) => {
             </View>
           )}
           <View style={styles.historyDateContainer}>
-            <Text style={styles.historyDate}>
-              {new Date(result.date.seconds * 1000).toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric'
-              })}
-            </Text>
-            <Text style={styles.historyTime}>
-              {new Date(result.date.seconds * 1000).toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
-            </Text>
+            <Text style={styles.historyDate}>{date}</Text>
+            <Text style={styles.historyTime}>{time}</Text>
           </View>
         </View>
         
         <View style={styles.historyRightContent}>
           <Text style={styles.historySpeed}>{result.peakSpeedKph.toFixed(1)}</Text>
           <Text style={styles.historySpeedUnit}>km/h</Text>
-          {result.angle !== undefined && result.angle !== null && (
+          {result.angle != null && (
             <Text style={styles.historyAngle}>{result.angle.toFixed(0)}°</Text>
           )}
         </View>
@@ -151,9 +169,7 @@ const ProgressChart = ({ data, selectedRange, onDataPointSelect }) => {
     decimalPlaces: 0,
     color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
     labelColor: (opacity = 1) => `rgba(60, 60, 67, ${opacity * 0.6})`,
-    style: { 
-      borderRadius: 0,
-    },
+    style: { borderRadius: 0 },
     propsForDots: {
       r: '4',
       strokeWidth: '2',
@@ -175,9 +191,7 @@ const ProgressChart = ({ data, selectedRange, onDataPointSelect }) => {
         height={220}
         chartConfig={chartConfig}
         bezier
-        onDataPointClick={({ index }) => {
-          onDataPointSelect(data[index]);
-        }}
+        onDataPointClick={({ index }) => onDataPointSelect(data[index])}
         style={styles.chart}
         withHorizontalLabels={true}
         withVerticalLabels={true}
@@ -197,73 +211,200 @@ const FilterControls = ({
   onSpeedFilterChange,
   minimumSpeed,
   onMinimumSpeedChange
-}) => {
-  return (
-    <View style={styles.filtersContainer}>
-      {/* Time Range Picker */}
-      <View style={styles.filterSection}>
-        <Text style={styles.filterSectionTitle}>Time Range</Text>
-        <View style={styles.segmentedControl}>
-          {TIME_RANGES.map((range) => (
-            <TouchableOpacity
-              key={range.key}
-              style={[
-                styles.segmentedButton,
-                selectedRange.key === range.key && styles.segmentedButtonActive
-              ]}
-              onPress={() => onRangeChange(range)}
-              activeOpacity={0.7}
-            >
-              <Text style={[
-                styles.segmentedButtonText,
-                selectedRange.key === range.key && styles.segmentedButtonTextActive
-              ]}>
-                {range.value}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Speed Filter */}
-      <View style={styles.filterSection}>
-        <View style={styles.filterHeader}>
-          <Text style={styles.filterSectionTitle}>Speed Filter</Text>
+}) => (
+  <View style={styles.filtersContainer}>
+    {/* Time Range Picker */}
+    <View style={styles.filterSection}>
+      <Text style={styles.filterSectionTitle}>Time Range</Text>
+      <View style={styles.segmentedControl}>
+        {TIME_RANGES.map((range) => (
           <TouchableOpacity
-            style={[styles.toggleButton, speedFilterEnabled && styles.toggleButtonActive]}
-            onPress={() => onSpeedFilterChange(!speedFilterEnabled)}
+            key={range.key}
+            style={[
+              styles.segmentedButton,
+              selectedRange.key === range.key && styles.segmentedButtonActive
+            ]}
+            onPress={() => onRangeChange(range)}
             activeOpacity={0.7}
           >
             <Text style={[
-              styles.toggleButtonText,
-              speedFilterEnabled && styles.toggleButtonTextActive
+              styles.segmentedButtonText,
+              selectedRange.key === range.key && styles.segmentedButtonTextActive
             ]}>
-              {speedFilterEnabled ? 'ON' : 'OFF'}
+              {range.value}
             </Text>
           </TouchableOpacity>
-        </View>
-
-        {speedFilterEnabled && (
-          <View style={styles.sliderSection}>
-            <View style={styles.sliderHeader}>
-              <Text style={styles.sliderLabel}>Minimum Speed</Text>
-              <Text style={styles.sliderValue}>{Math.round(minimumSpeed)} km/h</Text>
-            </View>
-            <Slider
-              style={styles.slider}
-              minimumValue={50}
-              maximumValue={400}
-              step={5}
-              value={minimumSpeed}
-              onValueChange={onMinimumSpeedChange}
-              minimumTrackTintColor="#007AFF"
-              maximumTrackTintColor="#E5E5EA"
-              thumbStyle={styles.sliderThumb}
-            />
-          </View>
-        )}
+        ))}
       </View>
     </View>
+
+    {/* Speed Filter */}
+    <View style={styles.filterSection}>
+      <View style={styles.filterHeader}>
+        <Text style={styles.filterSectionTitle}>Speed Filter</Text>
+        <TouchableOpacity
+          style={[styles.toggleButton, speedFilterEnabled && styles.toggleButtonActive]}
+          onPress={() => onSpeedFilterChange(!speedFilterEnabled)}
+          activeOpacity={0.7}
+        >
+          <Text style={[
+            styles.toggleButtonText,
+            speedFilterEnabled && styles.toggleButtonTextActive
+          ]}>
+            {speedFilterEnabled ? 'ON' : 'OFF'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {speedFilterEnabled && (
+        <View style={styles.sliderSection}>
+          <View style={styles.sliderHeader}>
+            <Text style={styles.sliderLabel}>Minimum Speed</Text>
+            <Text style={styles.sliderValue}>{Math.round(minimumSpeed)} km/h</Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={50}
+            maximumValue={400}
+            step={5}
+            value={minimumSpeed}
+            onValueChange={onMinimumSpeedChange}
+            minimumTrackTintColor="#007AFF"
+            maximumTrackTintColor="#E5E5EA"
+            thumbStyle={styles.sliderThumb}
+          />
+        </View>
+      )}
+    </View>
+  </View>
+);
+
+// MARK: - Video Modal Component
+const VideoModal = ({ 
+  visible, 
+  selectedVideo, 
+  videoPaused, 
+  videoLoading, 
+  onClose, 
+  onTogglePlayback, 
+  onVideoLoad, 
+  onVideoError 
+}) => {
+  if (!selectedVideo) return null;
+
+  const formatVideoDate = (timestamp) => {
+    if (!timestamp) {
+      return { date: 'Unknown', time: 'Unknown' };
+    }
+    
+    let date;
+    if (timestamp.toDate) {
+      date = timestamp.toDate();
+    } else if (timestamp.seconds) {
+      date = new Date(timestamp.seconds * 1000);
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else {
+      date = new Date(timestamp);
+    }
+    
+    return {
+      date: date.toLocaleDateString(),
+      time: date.toLocaleTimeString()
+    };
+  };
+
+  const { date, time } = formatVideoDate(selectedVideo.date);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View style={styles.videoModalContainer}>
+        <View style={styles.videoModalHeader}>
+          <TouchableOpacity 
+            onPress={onClose}
+            style={styles.videoModalCloseButton}
+          >
+            <Icon name="close" size={24} color="#1C1C1E" />
+          </TouchableOpacity>
+          <Text style={styles.videoModalTitle}>Detection Video</Text>
+          <TouchableOpacity 
+            onPress={onTogglePlayback}
+            style={styles.videoModalPlayButton}
+          >
+            <Icon name={videoPaused ? "play-arrow" : "pause"} size={24} color="#007AFF" />
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.videoContainer}>
+          <View style={styles.videoPlayerContainer}>
+            <Video
+              source={{ uri: selectedVideo.videoURL }}
+              style={styles.videoPlayer}
+              resizeMode="contain"
+              repeat={true}
+              rate={0.5}
+              ignoreSilentSwitch="obey"
+              muted={false}
+              controls={false}
+              paused={videoPaused}
+              playInBackground={false}
+              playWhenInactive={false}
+              onLoad={onVideoLoad}
+              onError={onVideoError}
+              onBuffer={() => {}}
+              onReadyForDisplay={() => {}}
+            />
+            
+            {videoLoading && (
+              <View style={styles.videoLoadingContainer}>
+                <Text style={styles.videoLoadingText}>Loading...</Text>
+              </View>
+            )}
+
+            <TouchableOpacity 
+              style={styles.videoOverlay}
+              onPress={onTogglePlayback}
+              activeOpacity={0.7}
+            >
+              <View style={styles.videoPlayButton}>
+                <Icon 
+                  name={videoPaused ? "play-arrow" : "pause"} 
+                  size={32} 
+                  color="#FFFFFF" 
+                />
+              </View>
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.videoInfo}>
+            <Text style={styles.videoInfoTitle}>Detection Details</Text>
+            <View style={styles.videoInfoRow}>
+              <Text style={styles.videoInfoLabel}>Speed:</Text>
+              <Text style={styles.videoInfoValue}>{selectedVideo.peakSpeedKph.toFixed(1)} km/h</Text>
+            </View>
+            <View style={styles.videoInfoRow}>
+              <Text style={styles.videoInfoLabel}>Date:</Text>
+              <Text style={styles.videoInfoValue}>{date}</Text>
+            </View>
+            <View style={styles.videoInfoRow}>
+              <Text style={styles.videoInfoLabel}>Time:</Text>
+              <Text style={styles.videoInfoValue}>{time}</Text>
+            </View>
+            {selectedVideo.angle != null && (
+              <View style={styles.videoInfoRow}>
+                <Text style={styles.videoInfoLabel}>Angle:</Text>
+                <Text style={styles.videoInfoValue}>{selectedVideo.angle.toFixed(1)}°</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 };
 
@@ -287,10 +428,12 @@ const HistoryView = () => {
   // Video State
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [showVideoModal, setShowVideoModal] = useState(false);
+  const [videoPaused, setVideoPaused] = useState(true);
+  const [videoLoading, setVideoLoading] = useState(false);
 
   // Auth State Management
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth(), (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthState('signedIn');
         setUser(user);
@@ -303,39 +446,32 @@ const HistoryView = () => {
     return unsubscribe;
   }, []);
 
-  // Computed values
-  const filteredTopSpeed = filteredResults.length > 0 
-    ? Math.max(...filteredResults.map(r => r.peakSpeedKph)) 
-    : 0;
-  
-  const filteredAverageSpeed = filteredResults.length > 0
-    ? filteredResults.reduce((sum, r) => sum + r.peakSpeedKph, 0) / filteredResults.length
-    : 0;
-
   // Subscribe to Firestore
   useEffect(() => {
     if (authState !== 'signedIn' || !user?.uid) return;
 
-    const unsubscribe = firestore()
-      .collection('users')
-      .doc(user.uid)
-      .collection('detections')
-      .orderBy('date', 'desc')
-      .onSnapshot((snapshot) => {
+    const detectionsRef = collection(db, 'users', user.uid, 'detections');
+    const q = query(detectionsRef, orderBy('date', 'desc'));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         const results = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
         }));
         setAllResults(results);
-      }, (error) => {
+      },
+      (error) => {
         console.error('Error fetching detections:', error);
         setAllResults([]);
-      });
+      }
+    );
 
     return unsubscribe;
   }, [authState, user?.uid]);
 
-  // Apply filters
+  // Apply filters when data or filters change
   useEffect(() => {
     applyFilters();
   }, [allResults, selectedRange, speedFilterEnabled, minimumSpeed]);
@@ -348,15 +484,33 @@ const HistoryView = () => {
     switch (selectedRange.key) {
       case 'week':
         const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        timeFiltered = allResults.filter(r => 
-          new Date(r.date.seconds * 1000) >= weekAgo
-        );
+        timeFiltered = allResults.filter(r => {
+          if (!r.date) return false;
+          let resultDate;
+          if (r.date.toDate) {
+            resultDate = r.date.toDate();
+          } else if (r.date.seconds) {
+            resultDate = new Date(r.date.seconds * 1000);
+          } else {
+            resultDate = new Date(r.date);
+          }
+          return resultDate >= weekAgo;
+        });
         break;
       case 'month':
         const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        timeFiltered = allResults.filter(r => 
-          new Date(r.date.seconds * 1000) >= monthAgo
-        );
+        timeFiltered = allResults.filter(r => {
+          if (!r.date) return false;
+          let resultDate;
+          if (r.date.toDate) {
+            resultDate = r.date.toDate();
+          } else if (r.date.seconds) {
+            resultDate = new Date(r.date.seconds * 1000);
+          } else {
+            resultDate = new Date(r.date);
+          }
+          return resultDate >= monthAgo;
+        });
         break;
       case 'all':
       default:
@@ -377,7 +531,17 @@ const HistoryView = () => {
     const groupedByDay = {};
     
     results.forEach(result => {
-      const date = new Date(result.date.seconds * 1000);
+      if (!result.date) return;
+      
+      let date;
+      if (result.date.toDate) {
+        date = result.date.toDate();
+      } else if (result.date.seconds) {
+        date = new Date(result.date.seconds * 1000);
+      } else {
+        date = new Date(result.date);
+      }
+      
       const dayKey = date.toDateString();
       
       if (!groupedByDay[dayKey] || groupedByDay[dayKey].topSpeed < result.peakSpeedKph) {
@@ -396,17 +560,32 @@ const HistoryView = () => {
     if (!user?.uid) return;
     
     try {
+      // Delete video from storage if exists
       if (result.videoURL) {
-        const videoRef = storage().refFromURL(result.videoURL);
-        await videoRef.delete();
+        try {
+          // Extract the path from the URL if it's a full URL, or use it as is if it's already a path
+          let videoPath;
+          if (result.videoURL.startsWith('gs://') || result.videoURL.startsWith('https://')) {
+            // If it's a full URL, we need to extract the path or use the reference from URL
+            // For now, let's assume videoURL is stored as a path in the format: videos/userId/filename
+            const urlParts = result.videoURL.split('/');
+            const filename = urlParts[urlParts.length - 1].split('?')[0]; // Remove query params
+            videoPath = `videos/${user.uid}/${filename}`;
+          } else {
+            videoPath = result.videoURL;
+          }
+          
+          const videoRef = storageRef(storage, videoPath);
+          await deleteObject(videoRef);
+        } catch (storageError) {
+          console.warn('Error deleting video from storage:', storageError);
+          // Continue with document deletion even if storage deletion fails
+        }
       }
       
-      await firestore()
-        .collection('users')
-        .doc(user.uid)
-        .collection('detections')
-        .doc(result.id)
-        .delete();
+      // Delete document from Firestore using modular API
+      const docRef = doc(db, 'users', user.uid, 'detections', result.id);
+      await deleteDoc(docRef);
         
     } catch (error) {
       console.error('Error deleting result:', error);
@@ -417,14 +596,40 @@ const HistoryView = () => {
   const handleVideoPress = (result) => {
     setSelectedVideo(result);
     setShowVideoModal(true);
+    setVideoPaused(false);
+    setVideoLoading(true);
   };
 
   const closeVideoModal = () => {
+    setVideoPaused(true);
     setShowVideoModal(false);
     setSelectedVideo(null);
+    setVideoLoading(false);
   };
 
-  // Helper function to safely format data point text
+  const toggleVideoPlayback = () => {
+    setVideoPaused(!videoPaused);
+  };
+
+  const onVideoLoad = () => {
+    setVideoLoading(false);
+  };
+
+  const onVideoError = (error) => {
+    console.log('Video error:', error);
+    setVideoLoading(false);
+    Alert.alert('Error', 'Unable to load video. Please check your internet connection.');
+  };
+
+  // Computed values
+  const filteredTopSpeed = filteredResults.length > 0 
+    ? Math.max(...filteredResults.map(r => r.peakSpeedKph)) 
+    : 0;
+  
+  const filteredAverageSpeed = filteredResults.length > 0
+    ? filteredResults.reduce((sum, r) => sum + r.peakSpeedKph, 0) / filteredResults.length
+    : 0;
+
   const getDataPointText = () => {
     if (selectedDataPoint) {
       const dateStr = selectedDataPoint.date.toLocaleDateString();
@@ -559,76 +764,20 @@ const HistoryView = () => {
       </ScrollView>
 
       {/* Video Modal */}
-      <Modal
+      <VideoModal
         visible={showVideoModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={closeVideoModal}
-      >
-        <View style={styles.videoModalContainer}>
-          <View style={styles.videoModalHeader}>
-            <TouchableOpacity 
-              onPress={closeVideoModal}
-              style={styles.videoModalCloseButton}
-            >
-              <Icon name="close" size={24} color="#1C1C1E" />
-            </TouchableOpacity>
-            <Text style={styles.videoModalTitle}>Detection Video</Text>
-            <View style={styles.videoModalHeaderSpacer} />
-          </View>
-          
-          {selectedVideo && (
-            <View style={styles.videoContainer}>
-              <Video
-                source={{ uri: selectedVideo.videoURL }}
-                style={styles.videoPlayer}
-                resizeMode="cover"   // fills without black bars, use "contain" if you want fit
-                repeat               // seamless loop
-                rate={0.25}           // slow motion (0.5 = half speed, can be 0.25–2.0)
-                ignoreSilentSwitch="obey"
-                muted={false}
-                controls={false}     // ensures native controls are hidden
-                paused={false}       // autoplay
-                playInBackground={false}
-                playWhenInactive={false}
-                onError={(error) => {
-                  console.log('Video error:', error);
-                  Alert.alert('Error', 'Unable to play video');
-                }}
-              />
-              
-              <View style={styles.videoInfo}>
-                <Text style={styles.videoInfoTitle}>Detection Details</Text>
-                <View style={styles.videoInfoRow}>
-                  <Text style={styles.videoInfoLabel}>Speed:</Text>
-                  <Text style={styles.videoInfoValue}>{selectedVideo.peakSpeedKph.toFixed(1)} km/h</Text>
-                </View>
-                <View style={styles.videoInfoRow}>
-                  <Text style={styles.videoInfoLabel}>Date:</Text>
-                  <Text style={styles.videoInfoValue}>
-                    {new Date(selectedVideo.date.seconds * 1000).toLocaleDateString()}
-                  </Text>
-                </View>
-                <View style={styles.videoInfoRow}>
-                  <Text style={styles.videoInfoLabel}>Time:</Text>
-                  <Text style={styles.videoInfoValue}>
-                    {new Date(selectedVideo.date.seconds * 1000).toLocaleTimeString()}
-                  </Text>
-                </View>
-                {selectedVideo.angle !== undefined && selectedVideo.angle !== null && (
-                  <View style={styles.videoInfoRow}>
-                    <Text style={styles.videoInfoLabel}>Angle:</Text>
-                    <Text style={styles.videoInfoValue}>{selectedVideo.angle.toFixed(1)}°</Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          )}
-        </View>
-      </Modal>
+        selectedVideo={selectedVideo}
+        videoPaused={videoPaused}
+        videoLoading={videoLoading}
+        onClose={closeVideoModal}
+        onTogglePlayback={toggleVideoPlayback}
+        onVideoLoad={onVideoLoad}
+        onVideoError={onVideoError}
+      />
     </View>
   );
 };
+
 
 // MARK: - Styles
 const styles = StyleSheet.create({

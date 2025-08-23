@@ -15,8 +15,26 @@ import {
   Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import auth, { onAuthStateChanged } from '@react-native-firebase/auth';
-import firestore from '@react-native-firebase/firestore';
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signOut as firebaseSignOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updatePassword as firebaseUpdatePassword,
+  deleteUser,
+  signInWithCredential,
+  GoogleAuthProvider,
+  AppleAuthProvider
+} from '@react-native-firebase/auth';
+import { 
+  getFirestore,
+  doc,
+  setDoc,
+  deleteDoc,
+  serverTimestamp
+} from '@react-native-firebase/firestore';
 import { GoogleSignin, GoogleSigninButton } from '@react-native-google-signin/google-signin';
 import appleAuth, { AppleButton } from '@invertase/react-native-apple-authentication';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -28,6 +46,10 @@ GoogleSignin.configure({
 });
 
 const { width, height } = Dimensions.get('window');
+
+// Initialize Firebase instances
+const auth = getAuth();
+const db = getFirestore();
 
 // Get safe area insets for proper spacing
 const getStatusBarHeight = () => {
@@ -48,7 +70,7 @@ const AccountView = () => {
   const [infoMessage, setInfoMessage] = useState(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth(), (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthState('signedIn');
         setUser(user);
@@ -64,12 +86,13 @@ const AccountView = () => {
 
   const saveUserToFirestore = async (user) => {
     try {
-      await firestore().collection('users').doc(user.uid).set({
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        createdAt: firestore.FieldValue.serverTimestamp(),
-        lastLoginAt: firestore.FieldValue.serverTimestamp(),
+        createdAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp(),
       }, { merge: true });
     } catch (error) {
       console.error('Error saving user to Firestore:', error);
@@ -78,7 +101,7 @@ const AccountView = () => {
 
   const signOut = async () => {
     try {
-      await auth().signOut();
+      await firebaseSignOut(auth);
       setInfoMessage('Signed out successfully');
     } catch (error) {
       setErrorMessage(error.message);
@@ -87,12 +110,13 @@ const AccountView = () => {
 
   const deleteAccount = async () => {
     try {
-      const currentUser = auth().currentUser;
+      const currentUser = auth.currentUser;
       if (currentUser) {
         // Delete user data from Firestore
-        await firestore().collection('users').doc(currentUser.uid).delete();
+        const userRef = doc(db, 'users', currentUser.uid);
+        await deleteDoc(userRef);
         // Delete the user account
-        await currentUser.delete();
+        await deleteUser(currentUser);
         setInfoMessage('Account deleted successfully');
       }
     } catch (error) {
@@ -109,10 +133,10 @@ const AccountView = () => {
       const userInfo = await GoogleSignin.signIn();
       
       // Create a Google credential with the token
-      const googleCredential = auth.GoogleAuthProvider.credential(userInfo.data.idToken);
+      const googleCredential = GoogleAuthProvider.credential(userInfo.data.idToken);
       
       // Sign-in the user with the credential
-      return auth().signInWithCredential(googleCredential);
+      return signInWithCredential(auth, googleCredential);
     } catch (error) {
       console.error('Google Sign-In Error:', error);
       setErrorMessage(error.message);
@@ -127,8 +151,8 @@ const AccountView = () => {
       });
 
       const { identityToken, nonce } = appleAuthRequestResponse;
-      const appleCredential = auth.AppleAuthProvider.credential(identityToken, nonce);
-      await auth().signInWithCredential(appleCredential);
+      const appleCredential = AppleAuthProvider.credential(identityToken, nonce);
+      await signInWithCredential(auth, appleCredential);
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -136,7 +160,7 @@ const AccountView = () => {
 
   const signIn = async (email, password) => {
     try {
-      await auth().signInWithEmailAndPassword(email, password);
+      await signInWithEmailAndPassword(auth, email, password);
       setInfoMessage('Signed in successfully');
     } catch (error) {
       setErrorMessage(error.message);
@@ -145,7 +169,7 @@ const AccountView = () => {
 
   const signUp = async (email, password) => {
     try {
-      await auth().createUserWithEmailAndPassword(email, password);
+      await createUserWithEmailAndPassword(auth, email, password);
       setInfoMessage('Account created successfully');
     } catch (error) {
       setErrorMessage(error.message);
@@ -154,7 +178,7 @@ const AccountView = () => {
 
   const sendPasswordReset = async (email) => {
     try {
-      await auth().sendPasswordResetEmail(email);
+      await sendPasswordResetEmail(auth, email);
       setInfoMessage('Password reset email sent');
     } catch (error) {
       setErrorMessage(error.message);
@@ -163,9 +187,9 @@ const AccountView = () => {
 
   const updatePassword = async (newPassword, callback) => {
     try {
-      const currentUser = auth().currentUser;
+      const currentUser = auth.currentUser;
       if (currentUser) {
-        await currentUser.updatePassword(newPassword);
+        await firebaseUpdatePassword(currentUser, newPassword);
         callback(true, 'Password updated successfully');
       }
     } catch (error) {
