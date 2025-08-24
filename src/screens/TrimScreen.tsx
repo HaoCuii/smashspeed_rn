@@ -208,12 +208,12 @@ const TrimScreen: React.FC = () => {
     
     setTimeout(() => {
       setRenderVideo(false);
-      navigation.navigate('Calibration' as never, {
+      navigation.navigate('Calibration', {
         sourceUri,
         duration: videoDuration,
         startSec,
         endSec
-      } as never);
+      });
       setIsExporting(false);
     }, 500);
   }, [navigation, sourceUri, videoDuration, startSec, endSec]);

@@ -17,16 +17,16 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import Share from 'react-native-share';
 import { getFirestore, collection, addDoc, serverTimestamp } from '@react-native-firebase/firestore';
 // Updated storage import - use modular API
-import { getStorage, ref, uploadBytes, getDownloadURL } from '@react-native-firebase/storage';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from '@react-native-firebase/storage';
 import { trim } from 'react-native-video-trim';
-import * as FileSystem from 'expo-file-system'; // Assuming you have this library for file management
+import RNFS from 'react-native-fs'; // Better alternative for file operations
 
 import { getApp } from '@react-native-firebase/app';
 import { getAuth } from '@react-native-firebase/auth';
 
 const app = getApp();
-
 const auth = getAuth(app);
+
 // Optional dependencies
 let BlurView: any;
 try {
@@ -53,15 +53,6 @@ type SpeedResultParams = {
 export default function SpeedResultScreen({ route, navigation }: any) {
   const { maxKph, angle, videoUri, startSec, endSec } = route.params as SpeedResultParams;
   
-  // Debug logging
-  console.log('SpeedResultScreen params:', {
-    maxKph,
-    angle,
-    videoUri,
-    startSec,
-    endSec,
-  });
-  
   const hasAngle = typeof angle === 'number' && isFinite(angle) && angle >= 0;
 
   // Animation states
@@ -84,6 +75,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
   // Firebase save states
   const [saveStatus, setSaveStatus] = useState<'idle' | 'trimming' | 'saving' | 'saved' | 'not_logged_in' | 'error'>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Animation effect
   useEffect(() => {
@@ -111,81 +103,130 @@ export default function SpeedResultScreen({ route, navigation }: any) {
   // Firebase save functionality
   useEffect(() => {
     const saveResult = async () => {
-      console.log('Starting save process...');
-      
-      // Use modular API for Auth
-      const app = getApp();
-      const auth = getAuth(app);
+      // Check if user is logged in
       const user = auth.currentUser;
       
       console.log('Current user:', user ? 'Logged in' : 'Not logged in');
       
       if (!user) {
-        console.log('Setting save status to not_logged_in');
         setSaveStatus('not_logged_in');
         return;
       }
-      
-      console.log('Checking video params:', { videoUri, startSec, endSec });
+
       if (!videoUri || startSec === undefined || endSec === undefined) {
         console.log('Missing video parameters, skipping save');
         return;
       }
 
-      console.log('Starting video trim and upload...');
       setSaveStatus('trimming');
+      
       try {
         const { uid } = user;
         const timestamp = Date.now();
         
-        console.log('Trimming video:', { startSec, endSec });
+
         const resultPath = await trim(videoUri, { 
           startTime: startSec * 1000, 
           endTime: endSec * 1000 
         });
-        console.log('Video trimmed to:', resultPath);
-        
+
         setSaveStatus('saving');
+        setUploadProgress(0);
 
         const filename = `${timestamp}.mp4`;
-        console.log('Uploading to storage:', filename);
-        
-        const storage = getStorage();
+
+        const storage = getStorage(app);
         const storageRef = ref(storage, `videos/${uid}/${filename}`);
         
-        // Read the local file as a base64 string
-        console.log('Reading local file as Base64:', resultPath);
-        const base64Video = await FileSystem.readAsStringAsync(resultPath, {
-          encoding: FileSystem.EncodingType.Base64,
+        // Read the file as bytes using RNFS
+
+        let filePath = resultPath;
+        
+        // Handle different path formats
+        if (resultPath.startsWith('file://')) {
+          filePath = resultPath.replace('file://', '');
+        }
+        
+        // Check if file exists
+        const exists = await RNFS.exists(filePath);
+        if (!exists) {
+          throw new Error(`File does not exist at path: ${filePath}`);
+        }
+        
+        // Get file stats
+        const stats = await RNFS.stat(filePath);
+
+        // Read file as base64 and convert to bytes
+        const base64Data = await RNFS.readFile(filePath, 'base64');
+
+        // Convert base64 to Uint8Array
+        const binaryString = atob(base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // Use uploadBytesResumable for better error handling and progress tracking
+        const uploadTask = uploadBytesResumable(storageRef, bytes, {
+          contentType: 'video/mp4',
         });
         
-        // Use uploadString to upload the base64 content
-        // Specify 'data_url' format as the base64 string is usually preceded by 'data:video/mp4;base64,'
-        // However, FileSystem.readAsStringAsync just returns the base64 data, so 'base64' is appropriate.
-        await uploadString(storageRef, base64Video, 'base64');
+        // Monitor upload progress
+        uploadTask.on('state_changed', 
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            setUploadProgress(Math.round(progress));
+          }, 
+          (error) => {
+            console.error('Upload error:', error);
+            throw error;
+          }
+        );
         
+        // Wait for upload to complete
+        await uploadTask;
+
         const videoURL = await getDownloadURL(storageRef);
-        console.log('Video uploaded, URL:', videoURL);
 
         // Clean up the local file after upload
-        await FileSystem.deleteAsync(resultPath).catch(console.warn);
+        try {
+          await RNFS.unlink(filePath);
+        } catch (cleanupError) {
+          console.warn('Failed to clean up local file:', cleanupError);
+        }
 
         const detectionData = {
           angle: hasAngle ? Math.round(angle as number) : null,
           date: serverTimestamp(),
           peakSpeedKph: Math.round(maxKph),
           videoURL,
+          uploadedAt: serverTimestamp(),
+          userId: uid,
         };
-        console.log('Saving to Firestore:', detectionData);
 
-        const db = getFirestore();
-        await addDoc(collection(db, 'users', uid, 'detections'), detectionData);
-        console.log('Successfully saved to Firestore');
+        const db = getFirestore(app);
+        const docRef = await addDoc(collection(db, 'users', uid, 'detections'), detectionData);
+        console.log('Successfully saved to Firestore with ID:', docRef.id);
 
         setSaveStatus('saved');
+        setUploadProgress(100);
       } catch (error) {
         console.error("Failed to save result:", error);
         setSaveStatus('error');
+        setUploadProgress(0);
+        
+        // More specific error handling
+        if (error instanceof Error) {
+          if (error.message.includes('network') || error.message.includes('Network')) {
+            Alert.alert('Upload Failed', 'Please check your internet connection and try again.');
+          } else if (error.message.includes('permission') || error.message.includes('Permission')) {
+            Alert.alert('Upload Failed', 'Permission denied. Please check your account settings.');
+          } else if (error.message.includes('File does not exist')) {
+            Alert.alert('Upload Failed', 'Video file could not be found. Please try recording again.');
+          } else {
+            Alert.alert('Upload Failed', 'An error occurred while saving your result. Please try again.');
+          }
+        }
       }
     };
 
@@ -195,8 +236,6 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       saveResult();
     } else {
       // Check if user is logged in even without video
-      const app = getApp();
-      const auth = getAuth(app);
       const user = auth.currentUser;
       if (!user) {
         console.log('No video data and not logged in');
@@ -271,7 +310,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       case 'trimming':
         return <StatusIndicator text="Processing video..." icon={null} />;
       case 'saving':
-        return <StatusIndicator text="Saving result..." icon={null} />;
+        return <StatusIndicator text={`Uploading... ${uploadProgress}%`} icon={null} />;
       case 'saved':
         return <StatusIndicator text="Result saved" icon="checkmark-circle" />;
       case 'not_logged_in':
