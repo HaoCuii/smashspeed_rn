@@ -17,7 +17,7 @@ import AnalyzeScreen from './src/screens/AnalyzeScreen';
 import ResultsScreen from './src/screens/ResultsScreen';
 import AccountScreen from './src/screens/AccountScreen';
 import SpeedResultScreen from './src/screens/SpeedResultScreen';
-
+//import YoloImage from './src/screens/Test';
 // ---------- Route types ----------
 export type DetectStackParamList = {
   DetectRoot: undefined;
