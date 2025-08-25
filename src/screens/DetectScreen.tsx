@@ -8,6 +8,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 import Modal from 'react-native-modal'; // Using react-native-modal for all popups
+import { BlurView } from 'expo-blur';
 
 import AppIcon from '../components/AppIcon';
 import CourtDiagram from '../../assets/courtdiagram.png';
@@ -17,6 +18,12 @@ import Onboarding from './OnboardingScreen';
 type RootStackParamList = {
   Trim: { sourceUri: string; duration: number };
 };
+
+const GlassPanel = ({ children, style }) => (
+  <BlurView intensity={80} tint="light" style={style}>
+    {children}
+  </BlurView>
+);
 
 const DetectScreen = () => {
   const [showInputSelector, setShowInputSelector] = useState(false);
@@ -230,7 +237,7 @@ const InputSourceSelectorModal = ({ visible, onClose, onRecord, onChoose }: Inpu
       onBackdropPress={onClose}
       style={styles.bottomSheetModal}
     >
-        <View style={styles.inputSelectorSheet}>
+        <GlassPanel style={styles.inputSelectorSheet}>
           <View style={styles.grabber} />
           <Text style={styles.inputSelectorTitle}>Analyze a Smash</Text>
           <View style={styles.warningBox}>
@@ -247,7 +254,7 @@ const InputSourceSelectorModal = ({ visible, onClose, onRecord, onChoose }: Inpu
               <Text style={[styles.inputButtonText, styles.inputButtonTextBordered]}>Choose from Library</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </GlassPanel>
     </Modal>
   );
 };
@@ -281,7 +288,7 @@ const RecordingGuideModalContent = ({ onClose }: RecordingGuideModalProps) => {
             <Text style={styles.rgCaption}>For a video tutorial, visit smashspeed.ca</Text>
           </TouchableOpacity>
           <Image source={CourtDiagram} style={styles.rgDiagram} resizeMode="contain" />
-          <View style={styles.rgCard}>
+          <GlassPanel style={styles.rgCard}>
             <Text style={styles.rgCardTitle}>How to Record for Best Results</Text>
             <View style={styles.rgRow}>
               <AppIcon name="video.fill" fallbackName="video" size={20} color="#007AFF" />
@@ -299,7 +306,7 @@ const RecordingGuideModalContent = ({ onClose }: RecordingGuideModalProps) => {
               <AppIcon name="film.stack" fallbackName="film" size={20} color="#007AFF" />
               <Text style={styles.rgRowText}><Text style={styles.rgBold}>Frame Rate: </Text>30 FPS is fine; 60 FPS is better.</Text>
             </View>
-          </View>
+          </GlassPanel>
         </ScrollView>
       </SafeAreaView>
     </ImageBackground>
@@ -345,13 +352,12 @@ const styles = StyleSheet.create({
 
   // Input source bottom sheet
   inputSelectorSheet: {
-    backgroundColor: 'rgba(242,242,247,0.95)',
     paddingTop: 10,
     paddingBottom: (StatusBar.currentHeight || 0) + 30,
     paddingHorizontal: 16,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    alignItems: 'center',
+    overflow: 'hidden',
   },
   inputSelectorTitle: { fontSize: 18, fontWeight: '600', color: '#3C3C43', marginBottom: 10 },
   warningBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(174,174,178,0.2)', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, marginBottom: 15 },
@@ -396,7 +402,12 @@ const styles = StyleSheet.create({
   },
   rgCaption: { fontSize: 13, color: '#1F2937', textAlign: 'center', marginVertical: 20, textDecorationLine: 'underline', marginBottom: 60},
   rgDiagram: { width: '90%', height: 200, marginBottom: 20, alignSelf: 'center' },
-  rgCard: { width: '100%', padding: 18, borderRadius: 16, backgroundColor: 'rgba(255, 255, 255, 0.9)', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  rgCard: { 
+    width: '100%', 
+    padding: 18, 
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
   rgCardTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 12, color: '#1F2937', textAlign: 'center' },
   rgRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
   rgRowText: { marginLeft: 10, fontSize: 16, color: '#1F2937', lineHeight: 20, flex: 1 },

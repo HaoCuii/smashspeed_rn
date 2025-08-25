@@ -91,14 +91,10 @@ const slides = [
 //================================================================================
 
 const GlassPanel = ({ children, style }) => {
-    if (Platform.OS === 'ios') {
-        return (
-            <BlurView intensity={20} tint="light" style={[styles.glassPanel, style]}>{children}</BlurView>
-        );
-    }
-    return <View style={[styles.glassPanelAndroid, style]}>{children}</View>;
+    return (
+        <BlurView intensity={20} tint="light" style={[styles.glassPanel, style]}>{children}</BlurView>
+    );
 };
-
 const IconComponent = ({ icon, iconSet, size = 24, color = '#007AFF' }) => {
     const iconProps = { name: icon, size, color };
     switch (iconSet) {
@@ -307,7 +303,7 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     slide: { width: width, flex: 1 },
-    glassPanel: { borderRadius: 35, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 1)' },
+    glassPanel: { borderRadius: 35, overflow: 'hidden' },
     glassPanelAndroid: { backgroundColor: 'rgba(255, 255, 255, 1)', borderRadius: 35, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.1, shadowRadius: 15 },
     welcomeContent: { flex: 1, justifyContent: 'center', paddingHorizontal: 20 },
     welcomeCard: { marginHorizontal: 0 },

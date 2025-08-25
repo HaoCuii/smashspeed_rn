@@ -1,1561 +1,304 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  Alert,
   Dimensions,
-  Modal,
   StyleSheet,
+  SafeAreaView,
+  ImageBackground,
+  Modal,
 } from 'react-native';
 import Video from 'react-native-video';
 import { LineChart } from 'react-native-chart-kit';
-import Slider from '@react-native-community/slider';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-
-// Firebase v22 modular imports
-import { getFirestore, collection, doc, query, orderBy, onSnapshot, deleteDoc } from '@react-native-firebase/firestore';
+import { BlurView } from 'expo-blur';
+import { getFirestore, collection, query, orderBy, onSnapshot } from '@react-native-firebase/firestore';
 import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
-import { getStorage, ref as storageRef, deleteObject, getDownloadURL } from '@react-native-firebase/storage';
 
 const { width: screenWidth } = Dimensions.get('window');
-
-// Initialize Firebase services
 const db = getFirestore();
 const auth = getAuth();
-const storage = getStorage();
 
-// Constants
 const TimeRange = {
-  WEEK: { key: 'week', value: 'Week' },
-  MONTH: { key: 'month', value: 'Month' },
+  WEEK: { key: 'week', value: 'Past Week' },
+  MONTH: { key: 'month', value: 'Past Month' },
   ALL: { key: 'all', value: 'All Time' },
 };
 
-const TIME_RANGES = [TimeRange.WEEK, TimeRange.MONTH, TimeRange.ALL];
-
-// MARK: - Glass Panel Component
+// MARK: - Reusable Components
 const GlassPanel = ({ children, style }) => (
-  <View style={[styles.glassPanel, style]}>
+  <BlurView intensity={50} tint="light" style={[styles.glassPanelBase, style]}>
     {children}
-  </View>
+  </BlurView>
 );
 
-// MARK: - Stat Card Component
-const StatCard = ({ label, value, icon }) => (
-  <View style={styles.statCard}>
-    <View style={styles.statIconContainer}>
-      <Icon name={icon} size={20} color="#007AFF" />
+const StatRow = ({ label, value }) => (
+    <View style={styles.statRow}>
+        <Text style={styles.statLabel}>{label}</Text>
+        <Text style={styles.statValue}>{value}</Text>
     </View>
-    <Text style={styles.statValue}>{value}</Text>
-    <Text style={styles.statLabel}>{label}</Text>
-  </View>
 );
 
-// MARK: - History Row Component
-const HistoryRow = ({ result, onDelete, onVideoPress }) => {
-  const hasVideo = result.videoURL;
-
-  const handleDelete = () => {
-    Alert.alert(
-      'Delete Result',
-      'Are you sure you want to delete this result?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive',
-          onPress: () => onDelete(result)
-        }
-      ]
-    );
-  };
-
-  const handlePress = () => {
-    if (hasVideo && onVideoPress) {
-      onVideoPress(result);
-    }
-  };
-
-  const formatDate = (timestamp) => {
-    if (!timestamp) {
-      return { date: 'Unknown', time: 'Unknown' };
-    }
-    
-    let date;
-    if (timestamp.toDate) {
-      // Firestore Timestamp object
-      date = timestamp.toDate();
-    } else if (timestamp.seconds) {
-      // Legacy timestamp format
-      date = new Date(timestamp.seconds * 1000);
-    } else if (timestamp instanceof Date) {
-      // Already a Date object
-      date = timestamp;
-    } else {
-      // Fallback for other formats
-      date = new Date(timestamp);
-    }
-
-    return {
-      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+const HistoryRow = ({ result, onPress }) => {
+    const formatDate = (timestamp) => {
+        if (!timestamp?.toDate) return { date: 'Unknown', time: '' };
+        const date = timestamp.toDate();
+        return {
+            date: date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+            time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+        };
     };
-  };
+    const { date, time } = formatDate(result.date);
 
-  const { date, time } = formatDate(result.date);
-
-  return (
-    <TouchableOpacity
-      style={styles.historyItem}
-      onPress={handlePress}
-      onLongPress={handleDelete}
-      activeOpacity={0.7}
-    >
-      <View style={styles.historyItemContent}>
-        <View style={styles.historyLeftContent}>
-          {hasVideo && (
-            <View style={styles.videoIndicator}>
-              <Icon name="play-arrow" size={16} color="#FFFFFF" />
-            </View>
-          )}
-          <View style={styles.historyDateContainer}>
-            <Text style={styles.historyDate}>{date}</Text>
-            <Text style={styles.historyTime}>{time}</Text>
-          </View>
-        </View>
-        
-        <View style={styles.historyRightContent}>
-          <Text style={styles.historySpeed}>{result.peakSpeedKph.toFixed(1)}</Text>
-          <Text style={styles.historySpeedUnit}>km/h</Text>
-          {result.angle != null && (
-            <Text style={styles.historyAngle}>{result.angle.toFixed(0)}°</Text>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-};
-
-// MARK: - Chart Component
-const ProgressChart = ({ data, selectedRange, onDataPointSelect }) => {
-  if (!data || data.length <= 1) {
     return (
-      <View style={styles.noDataContainer}>
-        <Icon name="show-chart" size={48} color="#C7C7CC" />
-        <Text style={styles.noDataText}>Not enough data</Text>
-        <Text style={styles.noDataSubtext}>Keep detecting to see your progress</Text>
-      </View>
-    );
-  }
-
-  const chartData = {
-    labels: data.map(point => {
-      const date = new Date(point.date);
-      return `${date.getMonth() + 1}/${date.getDate()}`;
-    }),
-    datasets: [{
-      data: data.map(point => point.topSpeed),
-      color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
-      strokeWidth: 3,
-    }],
-  };
-
-  const chartConfig = {
-    backgroundColor: '#FFFFFF',
-    backgroundGradientFrom: '#FFFFFF',
-    backgroundGradientTo: '#FFFFFF',
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
-    labelColor: (opacity = 1) => `rgba(60, 60, 67, ${opacity * 0.6})`,
-    style: { borderRadius: 0 },
-    propsForDots: {
-      r: '4',
-      strokeWidth: '2',
-      stroke: '#007AFF',
-      fill: '#FFFFFF'
-    },
-    propsForBackgroundLines: {
-      strokeDasharray: "0",
-      stroke: "rgba(0, 0, 0, 0.05)",
-      strokeWidth: 1
-    }
-  };
-
-  return (
-    <View style={styles.chartContainer}>
-      <LineChart
-        data={chartData}
-        width={screenWidth - 60}
-        height={220}
-        chartConfig={chartConfig}
-        bezier
-        onDataPointClick={({ index }) => onDataPointSelect(data[index])}
-        style={styles.chart}
-        withHorizontalLabels={true}
-        withVerticalLabels={true}
-        withDots={true}
-        withShadow={false}
-        withScrollableDot={false}
-      />
-    </View>
-  );
-};
-
-// MARK: - Filter Controls Component
-const FilterControls = ({
-  selectedRange,
-  onRangeChange,
-  speedFilterEnabled,
-  onSpeedFilterChange,
-  minimumSpeed,
-  onMinimumSpeedChange
-}) => (
-  <View style={styles.filtersContainer}>
-    {/* Time Range Picker */}
-    <View style={styles.filterSection}>
-      <Text style={styles.filterSectionTitle}>Time Range</Text>
-      <View style={styles.segmentedControl}>
-        {TIME_RANGES.map((range) => (
-          <TouchableOpacity
-            key={range.key}
-            style={[
-              styles.segmentedButton,
-              selectedRange.key === range.key && styles.segmentedButtonActive
-            ]}
-            onPress={() => onRangeChange(range)}
-            activeOpacity={0.7}
-          >
-            <Text style={[
-              styles.segmentedButtonText,
-              selectedRange.key === range.key && styles.segmentedButtonTextActive
-            ]}>
-              {range.value}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-
-    {/* Speed Filter */}
-    <View style={styles.filterSection}>
-      <View style={styles.filterHeader}>
-        <Text style={styles.filterSectionTitle}>Speed Filter</Text>
-        <TouchableOpacity
-          style={[styles.toggleButton, speedFilterEnabled && styles.toggleButtonActive]}
-          onPress={() => onSpeedFilterChange(!speedFilterEnabled)}
-          activeOpacity={0.7}
-        >
-          <Text style={[
-            styles.toggleButtonText,
-            speedFilterEnabled && styles.toggleButtonTextActive
-          ]}>
-            {speedFilterEnabled ? 'ON' : 'OFF'}
-          </Text>
+        <TouchableOpacity style={styles.historyRow} onPress={() => onPress(result)}>
+            <View style={styles.historyPlayIcon}>
+                <Icon name="play-arrow" size={16} color="#007AFF"/>
+            </View>
+            <View style={styles.historyInfo}>
+                <Text style={styles.historyDate}>{date}</Text>
+                <Text style={styles.historyTime}>{time}</Text>
+            </View>
+            <Text style={styles.historySpeed}>{result.peakSpeedKph.toFixed(1)} km/h</Text>
+            <Icon name="chevron-right" size={22} color="#3C3C43" />
         </TouchableOpacity>
-      </View>
-
-      {speedFilterEnabled && (
-        <View style={styles.sliderSection}>
-          <View style={styles.sliderHeader}>
-            <Text style={styles.sliderLabel}>Minimum Speed</Text>
-            <Text style={styles.sliderValue}>{Math.round(minimumSpeed)} km/h</Text>
-          </View>
-          <Slider
-            style={styles.slider}
-            minimumValue={50}
-            maximumValue={400}
-            step={5}
-            value={minimumSpeed}
-            onValueChange={onMinimumSpeedChange}
-            minimumTrackTintColor="#007AFF"
-            maximumTrackTintColor="#E5E5EA"
-            thumbStyle={styles.sliderThumb}
-          />
-        </View>
-      )}
-    </View>
-  </View>
-);
-
-// MARK: - Video Modal Component
-const VideoModal = ({ 
-  visible, 
-  selectedVideo, 
-  videoPaused, 
-  videoLoading, 
-  onClose, 
-  onTogglePlayback, 
-  onVideoLoad, 
-  onVideoError 
-}) => {
-  if (!selectedVideo) return null;
-
-  const formatVideoDate = (timestamp) => {
-    if (!timestamp) {
-      return { date: 'Unknown', time: 'Unknown' };
-    }
-    
-    let date;
-    if (timestamp.toDate) {
-      date = timestamp.toDate();
-    } else if (timestamp.seconds) {
-      date = new Date(timestamp.seconds * 1000);
-    } else if (timestamp instanceof Date) {
-      date = timestamp;
-    } else {
-      date = new Date(timestamp);
-    }
-    
-    return {
-      date: date.toLocaleDateString(),
-      time: date.toLocaleTimeString()
-    };
-  };
-
-  const { date, time } = formatVideoDate(selectedVideo.date);
-
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={styles.videoModalContainer}>
-        <View style={styles.videoModalHeader}>
-          <TouchableOpacity 
-            onPress={onClose}
-            style={styles.videoModalCloseButton}
-          >
-            <Icon name="close" size={24} color="#1C1C1E" />
-          </TouchableOpacity>
-          <Text style={styles.videoModalTitle}>Detection Video</Text>
-          <TouchableOpacity 
-            onPress={onTogglePlayback}
-            style={styles.videoModalPlayButton}
-          >
-            <Icon name={videoPaused ? "play-arrow" : "pause"} size={24} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.videoContainer}>
-          <View style={styles.videoPlayerContainer}>
-            <Video
-              source={{ uri: selectedVideo.videoURL }}
-              style={styles.videoPlayer}
-              resizeMode="contain"
-              repeat={true}
-              rate={0.5}
-              ignoreSilentSwitch="obey"
-              muted={false}
-              controls={false}
-              paused={videoPaused}
-              playInBackground={false}
-              playWhenInactive={false}
-              onLoad={onVideoLoad}
-              onError={onVideoError}
-              onBuffer={() => {}}
-              onReadyForDisplay={() => {}}
-            />
-            
-            {videoLoading && (
-              <View style={styles.videoLoadingContainer}>
-                <Text style={styles.videoLoadingText}>Loading...</Text>
-              </View>
-            )}
-
-            <TouchableOpacity 
-              style={styles.videoOverlay}
-              onPress={onTogglePlayback}
-              activeOpacity={0.7}
-            >
-              <View style={styles.videoPlayButton}>
-                <Icon 
-                  name={videoPaused ? "play-arrow" : "pause"} 
-                  size={32} 
-                  color="#FFFFFF" 
-                />
-              </View>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.videoInfo}>
-            <Text style={styles.videoInfoTitle}>Detection Details</Text>
-            <View style={styles.videoInfoRow}>
-              <Text style={styles.videoInfoLabel}>Speed:</Text>
-              <Text style={styles.videoInfoValue}>{selectedVideo.peakSpeedKph.toFixed(1)} km/h</Text>
-            </View>
-            <View style={styles.videoInfoRow}>
-              <Text style={styles.videoInfoLabel}>Date:</Text>
-              <Text style={styles.videoInfoValue}>{date}</Text>
-            </View>
-            <View style={styles.videoInfoRow}>
-              <Text style={styles.videoInfoLabel}>Time:</Text>
-              <Text style={styles.videoInfoValue}>{time}</Text>
-            </View>
-            {selectedVideo.angle != null && (
-              <View style={styles.videoInfoRow}>
-                <Text style={styles.videoInfoLabel}>Angle:</Text>
-                <Text style={styles.videoInfoValue}>{selectedVideo.angle.toFixed(1)}°</Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
+    );
 };
 
-// MARK: - Main History View
-const HistoryView = () => {
-  // Auth State
+// MARK: - Smash Details Modal
+const SmashDetailsModal = ({ result, onClose }) => {
+    if (!result) return null;
+
+    // Placeholder data for the timestamp list
+    const timestampData = [
+        { time: "0.00 s", speed: "0.0 km/h" }, { time: "0.01 s", speed: "32.0 km/h" },
+        { time: "0.03 s", speed: "28.1 km/h" }, { time: "0.05 s", speed: "29.2 km/h" },
+        { time: "0.08 s", speed: `${result.peakSpeedKph.toFixed(1)} km/h` },
+        { time: "0.10 s", speed: "29.7 km/h" }
+    ];
+
+    return (
+        <Modal visible={!!result} animationType="slide" onRequestClose={onClose}>
+            <ImageBackground source={require('../../assets/aurora_background.png')} style={styles.container}>
+                <SafeAreaView style={{flex: 1}}>
+                    <View style={styles.modalHeader}>
+                        <TouchableOpacity onPress={onClose}>
+                            <Icon name="keyboard-arrow-down" size={30} color="#000" />
+                        </TouchableOpacity>
+                        <Text style={styles.modalTitle}>Smash Details</Text>
+                        <View style={{width: 30}}/>
+                    </View>
+                    <ScrollView contentContainerStyle={styles.scrollContent}>
+                        <View style={styles.videoContainer}>
+                            <Video source={{ uri: result.videoURL }} style={styles.videoPlayer} resizeMode="contain" repeat={true} controls={true} />
+                        </View>
+                        <GlassPanel style={styles.panel}>
+                            <Text style={styles.sectionTitle}>Peak Speed</Text>
+                            <Text style={styles.peakSpeed}>{result.peakSpeedKph.toFixed(1)} km/h</Text>
+                        </GlassPanel>
+                        <GlassPanel style={styles.panel}>
+                            <Text style={styles.sectionTitle}>Timestamp Data</Text>
+                            {timestampData.map((item, index) => (
+                                <React.Fragment key={index}>
+                                    <View style={styles.timestampRow}>
+                                        <Text style={styles.timestampText}>{item.time}</Text>
+                                        <Text style={styles.timestampText}>{item.speed}</Text>
+                                    </View>
+                                    {index < timestampData.length - 1 && <View style={styles.divider} />}
+                                </React.Fragment>
+                            ))}
+                        </GlassPanel>
+                    </ScrollView>
+                </SafeAreaView>
+            </ImageBackground>
+        </Modal>
+    );
+};
+
+
+// MARK: - Main Results Screen
+const ResultsScreen = () => {
   const [user, setUser] = useState(null);
   const [authState, setAuthState] = useState('loading');
-  
-  // Data State
   const [allResults, setAllResults] = useState([]);
   const [filteredResults, setFilteredResults] = useState([]);
   const [chartData, setChartData] = useState([]);
-  
-  // Filter State
   const [selectedRange, setSelectedRange] = useState(TimeRange.WEEK);
-  const [speedFilterEnabled, setSpeedFilterEnabled] = useState(false);
-  const [minimumSpeed, setMinimumSpeed] = useState(150);
-  const [selectedDataPoint, setSelectedDataPoint] = useState(null);
+  const [selectedResult, setSelectedResult] = useState(null);
 
-  // Video State
-  const [selectedVideo, setSelectedVideo] = useState(null);
-  const [showVideoModal, setShowVideoModal] = useState(false);
-  const [videoPaused, setVideoPaused] = useState(true);
-  const [videoLoading, setVideoLoading] = useState(false);
-
-  // Auth State Management
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setAuthState('signedIn');
-        setUser(user);
-      } else {
-        setAuthState('signedOut');
-        setUser(null);
-      }
+      setUser(user);
+      setAuthState(user ? 'signedIn' : 'signedOut');
     });
-
     return unsubscribe;
   }, []);
 
-  // Subscribe to Firestore
   useEffect(() => {
-    if (authState !== 'signedIn' || !user?.uid) return;
-
+    if (!user?.uid) return;
     const detectionsRef = collection(db, 'users', user.uid, 'detections');
     const q = query(detectionsRef, orderBy('date', 'desc'));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const results = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setAllResults(results);
-      },
-      (error) => {
-        console.error('Error fetching detections:', error);
-        setAllResults([]);
-      }
-    );
-
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAllResults(results);
+    });
     return unsubscribe;
-  }, [authState, user?.uid]);
-
-  // Apply filters when data or filters change
-  useEffect(() => {
-    applyFilters();
-  }, [allResults, selectedRange, speedFilterEnabled, minimumSpeed]);
+  }, [user?.uid]);
 
   const applyFilters = useCallback(() => {
-    const now = new Date();
     let timeFiltered = allResults;
-
-    // Apply time filter
-    switch (selectedRange.key) {
-      case 'week':
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        timeFiltered = allResults.filter(r => {
-          if (!r.date) return false;
-          let resultDate;
-          if (r.date.toDate) {
-            resultDate = r.date.toDate();
-          } else if (r.date.seconds) {
-            resultDate = new Date(r.date.seconds * 1000);
-          } else {
-            resultDate = new Date(r.date);
-          }
-          return resultDate >= weekAgo;
-        });
-        break;
-      case 'month':
-        const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        timeFiltered = allResults.filter(r => {
-          if (!r.date) return false;
-          let resultDate;
-          if (r.date.toDate) {
-            resultDate = r.date.toDate();
-          } else if (r.date.seconds) {
-            resultDate = new Date(r.date.seconds * 1000);
-          } else {
-            resultDate = new Date(r.date);
-          }
-          return resultDate >= monthAgo;
-        });
-        break;
-      case 'all':
-      default:
-        timeFiltered = allResults;
-        break;
+    if (selectedRange.key !== 'all') {
+        const now = new Date();
+        const days = selectedRange.key === 'week' ? 7 : 30;
+        const cutoffDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+        timeFiltered = allResults.filter(r => r.date?.toDate() >= cutoffDate);
     }
+    setFilteredResults(timeFiltered);
+    updateChartData(timeFiltered);
+  }, [allResults, selectedRange]);
 
-    // Apply speed filter
-    const speedFiltered = speedFilterEnabled
-      ? timeFiltered.filter(r => r.peakSpeedKph >= minimumSpeed)
-      : timeFiltered;
-
-    setFilteredResults(speedFiltered);
-    updateChartData(speedFiltered);
-  }, [allResults, selectedRange, speedFilterEnabled, minimumSpeed]);
+  useEffect(() => {
+    applyFilters();
+  }, [allResults, selectedRange, applyFilters]);
 
   const updateChartData = (results) => {
-    const groupedByDay = {};
-    
-    results.forEach(result => {
-      if (!result.date) return;
-      
-      let date;
-      if (result.date.toDate) {
-        date = result.date.toDate();
-      } else if (result.date.seconds) {
-        date = new Date(result.date.seconds * 1000);
-      } else {
-        date = new Date(result.date);
+    const groupedByDay = results.reduce((acc, result) => {
+      const date = result.date.toDate();
+      const dayKey = date.toISOString().split('T')[0];
+      if (!acc[dayKey] || acc[dayKey].topSpeed < result.peakSpeedKph) {
+        acc[dayKey] = { date, topSpeed: result.peakSpeedKph };
       }
-      
-      const dayKey = date.toDateString();
-      
-      if (!groupedByDay[dayKey] || groupedByDay[dayKey].topSpeed < result.peakSpeedKph) {
-        groupedByDay[dayKey] = {
-          date: date,
-          topSpeed: result.peakSpeedKph
-        };
-      }
-    });
-
-    const chartData = Object.values(groupedByDay).sort((a, b) => a.date - b.date);
-    setChartData(chartData);
+      return acc;
+    }, {});
+    const sortedChartData = Object.values(groupedByDay).sort((a, b) => a.date - b.date);
+    setChartData(sortedChartData);
   };
 
-  const deleteResult = async (result) => {
-    if (!user?.uid) return;
-    
-    try {
-      // Delete video from storage if exists
-      if (result.videoURL) {
-        try {
-          // Extract the path from the URL if it's a full URL, or use it as is if it's already a path
-          let videoPath;
-          if (result.videoURL.startsWith('gs://') || result.videoURL.startsWith('https://')) {
-            // If it's a full URL, we need to extract the path or use the reference from URL
-            // For now, let's assume videoURL is stored as a path in the format: videos/userId/filename
-            const urlParts = result.videoURL.split('/');
-            const filename = urlParts[urlParts.length - 1].split('?')[0]; // Remove query params
-            videoPath = `videos/${user.uid}/${filename}`;
-          } else {
-            videoPath = result.videoURL;
-          }
-          
-          const videoRef = storageRef(storage, videoPath);
-          await deleteObject(videoRef);
-        } catch (storageError) {
-          console.warn('Error deleting video from storage:', storageError);
-          // Continue with document deletion even if storage deletion fails
-        }
-      }
-      
-      // Delete document from Firestore using modular API
-      const docRef = doc(db, 'users', user.uid, 'detections', result.id);
-      await deleteDoc(docRef);
-        
-    } catch (error) {
-      console.error('Error deleting result:', error);
-      Alert.alert('Error', 'Failed to delete result');
-    }
-  };
+  const filteredTopSpeed = filteredResults.length > 0 ? Math.max(...filteredResults.map(r => r.peakSpeedKph)) : 0;
+  const filteredAverageSpeed = filteredResults.length > 0 ? filteredResults.reduce((sum, r) => sum + r.peakSpeedKph, 0) / filteredResults.length : 0;
 
-  const handleVideoPress = (result) => {
-    setSelectedVideo(result);
-    setShowVideoModal(true);
-    setVideoPaused(false);
-    setVideoLoading(true);
-  };
-
-  const closeVideoModal = () => {
-    setVideoPaused(true);
-    setShowVideoModal(false);
-    setSelectedVideo(null);
-    setVideoLoading(false);
-  };
-
-  const toggleVideoPlayback = () => {
-    setVideoPaused(!videoPaused);
-  };
-
-  const onVideoLoad = () => {
-    setVideoLoading(false);
-  };
-
-  const onVideoError = (error) => {
-    console.log('Video error:', error);
-    setVideoLoading(false);
-    Alert.alert('Error', 'Unable to load video. Please check your internet connection.');
-  };
-
-  // Computed values
-  const filteredTopSpeed = filteredResults.length > 0 
-    ? Math.max(...filteredResults.map(r => r.peakSpeedKph)) 
-    : 0;
-  
-  const filteredAverageSpeed = filteredResults.length > 0
-    ? filteredResults.reduce((sum, r) => sum + r.peakSpeedKph, 0) / filteredResults.length
-    : 0;
-
-  const getDataPointText = () => {
-    if (selectedDataPoint) {
-      const dateStr = selectedDataPoint.date.toLocaleDateString();
-      const speedStr = selectedDataPoint.topSpeed.toFixed(1);
-      return `${dateStr} • ${speedStr} km/h`;
-    }
-    const rangeText = selectedRange.value || 'Week';
-    const resultsCount = filteredResults.length || 0;
-    const pluralText = resultsCount !== 1 ? 's' : '';
-    return `${rangeText} • ${resultsCount} detection${pluralText}`;
-  };
-
-  if (authState !== 'signedIn') {
+  if (authState !== 'signedIn' || allResults.length === 0) {
+    const message = authState !== 'signedIn' ? "Please sign in to view your results." : "Start detecting to see your results here!";
     return (
-      <View style={styles.container}>
-        <View style={styles.emptyStateContainer}>
-          <Icon name="person-outline" size={64} color="#C7C7CC" />
-          <Text style={styles.emptyStateTitle}>Sign In Required</Text>
-          <Text style={styles.emptyStateMessage}>Please sign in to view your detection history</Text>
-        </View>
-      </View>
-    );
-  }
-
-  if (allResults.length === 0) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.emptyStateContainer}>
-          <Icon name="timeline" size={64} color="#C7C7CC" />
-          <Text style={styles.emptyStateTitle}>No History Yet</Text>
-          <Text style={styles.emptyStateMessage}>Start detecting to see your results here</Text>
-        </View>
-      </View>
+      <ImageBackground source={require('../../assets/aurora_background.png')} style={styles.container}>
+        <SafeAreaView style={styles.emptyStateContainer}>
+          <Icon name="timeline" size={64} color="rgba(60, 60, 67, 0.3)" />
+          <Text style={styles.emptyStateTitle}>{authState !== 'signedIn' ? "Sign In Required" : "No History Yet"}</Text>
+          <Text style={styles.emptyStateMessage}>{message}</Text>
+        </SafeAreaView>
+      </ImageBackground>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* Background decorative shapes */}
-      <View style={styles.backgroundDecor1} />
-      <View style={styles.backgroundDecor2} />
-      <View style={styles.backgroundDecor3} />
-      
-      <ScrollView 
-        style={styles.scrollView} 
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Your Stats</Text>
-          <Text style={styles.headerSubtitle}>
-            {getDataPointText()}
-          </Text>
-        </View>
-
-        {/* Stats Cards */}
-        <View style={styles.statsContainer}>
-          <StatCard 
-            icon="speed"
-            label="Top Speed"
-            value={`${filteredTopSpeed.toFixed(1)} km/h`}
-          />
-          <StatCard 
-            icon="trending-up"
-            label="Average"
-            value={`${filteredAverageSpeed.toFixed(1)} km/h`}
-          />
-          <StatCard 
-            icon="assessment"
-            label="Total"
-            value={`${filteredResults.length}`}
-          />
-        </View>
-
-        {/* Chart Section */}
-        <GlassPanel style={styles.chartPanel}>
-          <View style={styles.chartHeader}>
-            <Text style={styles.sectionTitle}>Progress Chart</Text>
-          </View>
-          <ProgressChart 
-            data={chartData}
-            selectedRange={selectedRange}
-            onDataPointSelect={setSelectedDataPoint}
-          />
-        </GlassPanel>
-
-        {/* Filter Controls */}
-        <GlassPanel style={styles.filterPanel}>
-          <FilterControls
-            selectedRange={selectedRange}
-            onRangeChange={setSelectedRange}
-            speedFilterEnabled={speedFilterEnabled}
-            onSpeedFilterChange={setSpeedFilterEnabled}
-            minimumSpeed={minimumSpeed}
-            onMinimumSpeedChange={setMinimumSpeed}
-          />
-        </GlassPanel>
-
-        {/* History List */}
-        <GlassPanel style={styles.historyPanel}>
-          <View style={styles.historyHeader}>
-            <Text style={styles.sectionTitle}>Recent Detections</Text>
-            {filteredResults.length > 0 && (
-              <Text style={styles.historyCount}>{filteredResults.length} results</Text>
-            )}
-          </View>
+    <ImageBackground source={require('../../assets/aurora_background.png')} style={styles.container}>
+      <SafeAreaView style={{flex: 1}}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <Text style={styles.largeTitle}>Results</Text>
           
-          {filteredResults.length === 0 ? (
-            <View style={styles.noResultsContainer}>
-              <Icon name="filter-list-off" size={32} color="#C7C7CC" />
-              <Text style={styles.noResultsText}>No results match your filters</Text>
-            </View>
-          ) : (
-            <View style={styles.historyList}>
-              {filteredResults.slice(0, 20).map((item) => (
-                <HistoryRow 
-                  key={item.id} 
-                  result={item} 
-                  onDelete={deleteResult}
-                  onVideoPress={handleVideoPress}
-                />
-              ))}
-              {filteredResults.length > 20 && (
-                <Text style={styles.moreResultsText}>
-                  and {filteredResults.length - 20} more results...
-                </Text>
-              )}
-            </View>
-          )}
-        </GlassPanel>
-      </ScrollView>
+          <GlassPanel style={styles.panel}>
+            <Text style={styles.sectionTitle}>Filtered Stats</Text>
+            <StatRow label="Top Speed" value={`${filteredTopSpeed.toFixed(1)} km/h`} />
+            <View style={styles.divider} />
+            <StatRow label="Average Speed" value={`${filteredAverageSpeed.toFixed(1)} km/h`} />
+            <View style={styles.divider} />
+            <StatRow label="Total Smashes" value={filteredResults.length} />
+          </GlassPanel>
 
-      {/* Video Modal */}
-      <VideoModal
-        visible={showVideoModal}
-        selectedVideo={selectedVideo}
-        videoPaused={videoPaused}
-        videoLoading={videoLoading}
-        onClose={closeVideoModal}
-        onTogglePlayback={toggleVideoPlayback}
-        onVideoLoad={onVideoLoad}
-        onVideoError={onVideoError}
-      />
-    </View>
+          <GlassPanel style={styles.panel}>
+            <Text style={styles.sectionTitle}>Progress Over Time</Text>
+            <Text style={styles.sectionSubtitle}>Top Speed per Day ({selectedRange.value})</Text>
+            {chartData.length > 1 ? (
+                <LineChart
+                    data={{
+                        labels: chartData.map(p => { const d = p.date; return `${d.getMonth() + 1}/${d.getDate()}`; }),
+                        datasets: [{ data: chartData.map(p => p.topSpeed) }]
+                    }}
+                    width={screenWidth - 72}
+                    height={220}
+                    chartConfig={{
+                        backgroundColor: "transparent", backgroundGradientFromOpacity: 0, backgroundGradientToOpacity: 0,
+                        color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
+                        labelColor: (opacity = 1) => `rgba(60, 60, 67, ${opacity * 0.8})`,
+                        propsForDots: { r: "4", strokeWidth: "2", stroke: "#007AFF" },
+                        propsForBackgroundLines: { stroke: "rgba(60, 60, 67, 0.1)" }
+                    }}
+                    bezier style={{ marginLeft: -10, paddingVertical: 10 }}
+                />
+            ) : (
+                <View style={styles.noDataContainer}><Text style={styles.noDataText}>Not enough data to draw a chart.</Text></View>
+            )}
+          </GlassPanel>
+
+          <GlassPanel style={styles.panel}>
+            <Text style={styles.sectionTitle}>Filters</Text>
+            <View style={styles.filterRow}>
+                <Text style={styles.filterLabel}>Time Range</Text>
+                <TouchableOpacity style={styles.filterButton}>
+                    <Text style={styles.filterButtonText}>{selectedRange.value}</Text>
+                    <Icon name="expand-more" size={20} color="#3C3C43"/>
+                </TouchableOpacity>
+            </View>
+          </GlassPanel>
+          
+          <GlassPanel style={styles.panel}>
+            <Text style={styles.sectionTitle}>History</Text>
+            {filteredResults.length > 0 ? (
+                filteredResults.map((result, index) => (
+                    <React.Fragment key={result.id}>
+                        <HistoryRow result={result} onPress={setSelectedResult} />
+                        {index < filteredResults.length - 1 && <View style={styles.divider} />}
+                    </React.Fragment>
+                ))
+            ) : (
+                <Text style={styles.noDataText}>No results for this period.</Text>
+            )}
+          </GlassPanel>
+
+        </ScrollView>
+        <SmashDetailsModal result={selectedResult} onClose={() => setSelectedResult(null)} />
+      </SafeAreaView>
+    </ImageBackground>
   );
 };
 
-
 // MARK: - Styles
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 30,
-  },
-  glassPanel: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginHorizontal: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  
-  // Header
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 24,
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    letterSpacing: -0.5,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#8E8E93',
-    marginTop: 4,
-    fontWeight: '500',
-  },
-
-  // Stats Cards
-  statsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    marginBottom: 16,
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  statIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F0F8FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
-    textAlign: 'center',
-    fontWeight: '500',
-  },
-
-  // Chart
-  chartPanel: {
-    padding: 20,
-  },
-  chartHeader: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  chartContainer: {
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  chart: {
-    marginLeft: -10,
-  },
-  noDataContainer: {
-    height: 200,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  noDataText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#8E8E93',
-    marginTop: 12,
-  },
-  noDataSubtext: {
-    fontSize: 14,
-    color: '#C7C7CC',
-    marginTop: 4,
-  },
-
-  // Filters
-  filterPanel: {
-    padding: 20,
-  },
-  filtersContainer: {
-    gap: 24,
-  },
-  filterSection: {
-    gap: 12,
-  },
-  filterSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  filterHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#F2F2F7',
-    borderRadius: 12,
-    padding: 4,
-  },
-  segmentedButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  segmentedButtonActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  segmentedButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#8E8E93',
-  },
-  segmentedButtonTextActive: {
-    color: '#1C1C1E',
-    fontWeight: '600',
-  },
-  toggleButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#F2F2F7',
-  },
-  toggleButtonActive: {
-    backgroundColor: '#007AFF',
-  },
-  toggleButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#8E8E93',
-  },
-  toggleButtonTextActive: {
-    color: '#FFFFFF',
-  },
-  sliderSection: {
-    marginTop: 8,
-  },
-  sliderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  sliderLabel: {
-    fontSize: 14,
-    color: '#1C1C1E',
-    fontWeight: '500',
-  },
-  sliderValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-  slider: {
-    width: '100%',
-    height: 40,
-  },
-  sliderThumb: {
-    backgroundColor: '#FFFFFF',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-
-  // History
-  historyPanel: {
-    paddingTop: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-  },
-  historyHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  historyCount: {
-    fontSize: 14,
-    color: '#8E8E93',
-    fontWeight: '500',
-  },
-  historyList: {
-    gap: 1,
-  },
-  historyItem: {
-    backgroundColor: '#FBFBFC',
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  historyItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-  },
-  historyLeftContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  videoIndicator: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#007AFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  historyDateContainer: {
-    flex: 1,
-  },
-  historyDate: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  historyTime: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  historyRightContent: {
-    alignItems: 'flex-end',
-  },
-  historySpeed: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1C1C1E',
-  },
-  historySpeedUnit: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: -2,
-    fontWeight: '500',
-  },
-  historyAngle: {
-    fontSize: 11,
-    color: '#C7C7CC',
-    marginTop: 2,
-  },
-  noResultsContainer: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  noResultsText: {
-    fontSize: 16,
-    color: '#8E8E93',
-    marginTop: 8,
-    fontWeight: '500',
-  },
-  moreResultsText: {
-    textAlign: 'center',
-    color: '#8E8E93',
-    fontSize: 14,
-    paddingVertical: 16,
-    fontStyle: 'italic',
-  },
-
-  // Empty State
-  emptyStateContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyStateTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    marginTop: 20,
-    marginBottom: 8,
-  },
-  emptyStateMessage: {
-    fontSize: 16,
-    color: '#8E8E93',
-    textAlign: 'center',
-    lineHeight: 22,
-    fontWeight: '500',
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  backgroundDecor1: {
-    position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(0, 122, 255, 0.03)',
-    top: -50,
-    right: -70,
-    zIndex: 0,
-  },
-  backgroundDecor2: {
-    position: 'absolute',
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: 'rgba(0, 122, 255, 0.05)',
-    top: 200,
-    left: -60,
-    zIndex: 0,
-  },
-  backgroundDecor3: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(0, 122, 255, 0.04)',
-    bottom: 150,
-    right: -40,
-    zIndex: 0,
-  },
-  scrollView: {
-    flex: 1,
-    zIndex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 30,
-  },
-  glassPanel: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginHorizontal: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  
-  // Header
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 24,
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    letterSpacing: -0.5,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#8E8E93',
-    marginTop: 4,
-    fontWeight: '500',
-  },
-
-  // Stats Cards
-  statsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    marginBottom: 16,
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  statIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F0F8FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
-    textAlign: 'center',
-    fontWeight: '500',
-  },
-
-  // Chart
-  chartPanel: {
-    padding: 20,
-  },
-  chartHeader: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  chartContainer: {
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  chart: {
-    marginLeft: -10,
-  },
-  noDataContainer: {
-    height: 200,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  noDataText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#8E8E93',
-    marginTop: 12,
-  },
-  noDataSubtext: {
-    fontSize: 14,
-    color: '#C7C7CC',
-    marginTop: 4,
-  },
-
-  // Filters
-  filterPanel: {
-    padding: 20,
-  },
-  filtersContainer: {
-    gap: 24,
-  },
-  filterSection: {
-    gap: 12,
-  },
-  filterSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  filterHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#F2F2F7',
-    borderRadius: 12,
-    padding: 4,
-  },
-  segmentedButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  segmentedButtonActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  segmentedButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#8E8E93',
-  },
-  segmentedButtonTextActive: {
-    color: '#1C1C1E',
-    fontWeight: '600',
-  },
-  toggleButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#F2F2F7',
-  },
-  toggleButtonActive: {
-    backgroundColor: '#007AFF',
-  },
-  toggleButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#8E8E93',
-  },
-  toggleButtonTextActive: {
-    color: '#FFFFFF',
-  },
-  sliderSection: {
-    marginTop: 8,
-  },
-  sliderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  sliderLabel: {
-    fontSize: 14,
-    color: '#1C1C1E',
-    fontWeight: '500',
-  },
-  sliderValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-  slider: {
-    width: '100%',
-    height: 40,
-  },
-  sliderThumb: {
-    backgroundColor: '#FFFFFF',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-
-  // History
-  historyPanel: {
-    paddingTop: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-  },
-  historyHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  historyCount: {
-    fontSize: 14,
-    color: '#8E8E93',
-    fontWeight: '500',
-  },
-  historyList: {
-    gap: 1,
-  },
-  historyItem: {
-    backgroundColor: '#FBFBFC',
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  historyItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-  },
-  historyLeftContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  videoIndicator: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#007AFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  historyDateContainer: {
-    flex: 1,
-  },
-  historyDate: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  historyTime: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  historyRightContent: {
-    alignItems: 'flex-end',
-  },
-  historySpeed: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1C1C1E',
-  },
-  historySpeedUnit: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: -2,
-    fontWeight: '500',
-  },
-  historyAngle: {
-    fontSize: 11,
-    color: '#C7C7CC',
-    marginTop: 2,
-  },
-  noResultsContainer: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  noResultsText: {
-    fontSize: 16,
-    color: '#8E8E93',
-    marginTop: 8,
-    fontWeight: '500',
-  },
-  moreResultsText: {
-    textAlign: 'center',
-    color: '#8E8E93',
-    fontSize: 14,
-    paddingVertical: 16,
-    fontStyle: 'italic',
-  },
-
-  // Video Modal
-  videoModalContainer: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  videoModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
-    paddingTop: 60, // Account for status bar
-  },
-  videoModalCloseButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F2F2F7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  videoModalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  videoModalHeaderSpacer: {
-    width: 32,
-  },
-  videoContainer: {
-    flex: 1,
-    padding: 20,
-  },
-  videoPlayer: {
-    width: '100%',
-    height: 300,
-    backgroundColor: '#000000',
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  videoInfo: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 12,
-    padding: 20,
-  },
-  videoInfoTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1C1C1E',
-    marginBottom: 16,
-  },
-  videoInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  videoInfoLabel: {
-    fontSize: 16,
-    color: '#8E8E93',
-    fontWeight: '500',
-  },
-  videoInfoValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-
-  // Empty State
-  emptyStateContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyStateTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    marginTop: 20,
-    marginBottom: 8,
-  },
-  emptyStateMessage: {
-    fontSize: 16,
-    color: '#8E8E93',
-    textAlign: 'center',
-    lineHeight: 22,
-    fontWeight: '500',
-  },
+  container: { flex: 1 },
+  scrollContent: { paddingTop: 20, paddingHorizontal: 16, paddingBottom: 40 },
+  largeTitle: { fontSize: 34, fontWeight: 'bold', color: '#000', marginBottom: 20, paddingHorizontal: 4 },
+  glassPanelBase: { borderRadius: 20, overflow: 'hidden' },
+  panel: { marginBottom: 24, paddingVertical: 10 },
+  sectionTitle: { fontSize: 20, fontWeight: 'bold', color: '#000', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 10 },
+  sectionSubtitle: { fontSize: 15, color: '#3C3C43', paddingHorizontal: 20, marginBottom: 10 },
+  statRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12 },
+  statLabel: { fontSize: 16, color: '#000' },
+  statValue: { fontSize: 16, fontWeight: '600', color: '#3C3C43' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(60, 60, 67, 0.2)', marginHorizontal: 20 },
+  noDataContainer: { height: 220, justifyContent: 'center', alignItems: 'center' },
+  noDataText: { fontSize: 16, color: '#8E8E93', padding: 20, textAlign: 'center' },
+  filterRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 10 },
+  filterLabel: { fontSize: 16, color: '#000' },
+  filterButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(120, 120, 128, 0.12)', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, gap: 4 },
+  filterButtonText: { fontSize: 15, fontWeight: '500', color: '#000' },
+  emptyStateContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  emptyStateTitle: { fontSize: 22, fontWeight: 'bold', color: 'rgba(60, 60, 67, 0.8)', marginTop: 16, marginBottom: 8 },
+  emptyStateMessage: { fontSize: 16, color: 'rgba(60, 60, 67, 0.6)', textAlign: 'center', lineHeight: 22 },
+  historyRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, gap: 15 },
+  historyPlayIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0, 122, 255, 0.1)', justifyContent: 'center', alignItems: 'center' },
+  historyInfo: { flex: 1 },
+  historyDate: { fontSize: 16, fontWeight: '600', color: '#000' },
+  historyTime: { fontSize: 13, color: '#3C3C43', marginTop: 2 },
+  historySpeed: { fontSize: 18, fontWeight: 'bold', color: '#000', marginRight: 5 },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: 20 },
+  modalTitle: { fontSize: 18, fontWeight: '600' },
+  videoContainer: { paddingHorizontal: 16, marginBottom: 20 },
+  videoPlayer: { width: '100%', height: 250, borderRadius: 16, backgroundColor: '#000' },
+  peakSpeed: { fontSize: 48, fontWeight: 'bold', textAlign: 'center', paddingBottom: 20, color: '#000' },
+  timestampRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
+  timestampText: { fontSize: 16, color: '#3C3C43', fontFamily: 'monospace' },
 });
 
-export default HistoryView;
+export default ResultsScreen;
