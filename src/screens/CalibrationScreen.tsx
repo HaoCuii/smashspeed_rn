@@ -10,7 +10,8 @@ import {
   TextInput,
   Platform,
   Modal,
-  ImageBackground, // Added ImageBackground
+  ImageBackground,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -91,25 +92,31 @@ export default function CalibrationScreen() {
   const insets = useSafeAreaInsets();
   const { sourceUri, startSec, endSec } = route.params;
 
-  const [referenceLength, setReferenceLength] = useState('3.87');
+  // --- FIX START ---
+  // Revert to the most robust pattern: initialize with zero and wait for onLayout.
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  const point1 = useSharedValue({ x: 0, y: 0 });
+  const point2 = useSharedValue({ x: 0, y: 0 });
+  // --- FIX END ---
+  
+  const [referenceLength, setReferenceLength] = useState('3.87');
   const videoPixelSize = useRef({ width: 0, height: 0 });
   const [showInfoSheet, setShowInfoSheet] = useState(false);
 
-  const point1 = useSharedValue({ x: 0, y: 0 });
-  const point2 = useSharedValue({ x: 0, y: 0 });
   const liveOffset1 = useSharedValue({ width: 0, height: 0 });
   const liveOffset2 = useSharedValue({ width: 0, height: 0 });
   const isDragging1 = useSharedValue(false);
   const isDragging2 = useSharedValue(false);
   const activeHandle = useSharedValue<1 | 2 | null>(null);
 
+
   const onContainerLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
     if (viewSize.width === 0) {
       setViewSize({ width, height });
-      point1.value = { x: width * 0.3, y: height * 0.8 };
-      point2.value = { x: width * 0.7, y: height * 0.8 };
+      // Change the 'y' value from 0.8 to 0.5
+      point1.value = { x: width * 0.3, y: height * 0.65 };
+      point2.value = { x: width * 0.7, y: height * 0.65 };
     }
   };
 
@@ -194,7 +201,6 @@ export default function CalibrationScreen() {
     }
 
     const metersPerPixel = realLength / pixelDistance;
-    // @ts-ignore
     navigation.navigate('Analyze', { sourceUri, startSec, endSec, metersPerPixel });
   };
 
@@ -216,6 +222,7 @@ export default function CalibrationScreen() {
 
         <GestureDetector gesture={panGesture}>
           <View style={styles.videoContainer} onLayout={onContainerLayout}>
+            {/* Conditional rendering prevents crashes and ensures correct initial positioning. */}
             {viewSize.width > 0 && (
               <>
                 <Video source={{ uri: sourceUri }} style={styles.video} resizeMode="contain" paused={true} onLoad={onVideoLoad} />
@@ -285,7 +292,7 @@ const styles = StyleSheet.create({
   topBarButton: { padding: 8, minWidth: 70, alignItems: 'center' },
   topBarButtonText: { color: '#007AFF', fontSize: 17 },
   topBarTitle: { fontSize: 17, fontWeight: '600' },
-  videoContainer: { flex: 1, backgroundColor: 'transparent' }, // MODIFIED: Changed from #000
+  videoContainer: { flex: 1, backgroundColor: 'transparent' },
   video: { ...StyleSheet.absoluteFillObject },
   handleContainer: {
     width: 80,
@@ -318,16 +325,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: 'white',
-  },
-  handlePinCenterDot: {
-    position: 'absolute',
-    top: 16,
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.5)',
   },
   glassPanel: { borderRadius: 35, overflow: 'hidden', margin: 16 },
   glassPanelAndroid: {

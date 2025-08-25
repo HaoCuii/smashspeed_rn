@@ -65,7 +65,8 @@ const TrimScreen: React.FC = () => {
     Number.isFinite(durationParam) && durationParam > 0 ? durationParam : 0
   );
   const [isExporting, setIsExporting] = React.useState(false);
-  const [paused, setPaused] = React.useState(false);
+  // Change: Start video in a paused state.
+  const [paused, setPaused] = React.useState(true);
   const [renderVideo, setRenderVideo] = React.useState(true);
 
   // Handles position in pixels
@@ -101,6 +102,7 @@ const TrimScreen: React.FC = () => {
     }
   }, []);
 
+  // Change: Throttled seek function to update video position during handle drag.
   const seekThrottled = React.useCallback((time: number) => {
     const now = Date.now();
     if (now - lastSeekRef.current > SEEK_THROTTLE_MS) {
@@ -141,7 +143,7 @@ const TrimScreen: React.FC = () => {
           handle.value = wClamp(newX, leftHandleX.value + 1, TRACK_WIDTH);
         }
         
-        // Seek to the handle position
+        // Change: Seek to the handle position in real-time as the user drags.
         if (videoDuration > 0) {
           const time = (handle.value / TRACK_WIDTH) * videoDuration;
           runOnJS(seekThrottled)(time);
@@ -149,7 +151,7 @@ const TrimScreen: React.FC = () => {
       })
       .onEnd(() => {
         handle.value = withSpring(handle.value);
-        runOnJS(setPaused)(false); // Resume playback
+        // Change: Removed auto-play on drag end to give user control.
       });
   };
 
@@ -169,7 +171,7 @@ const TrimScreen: React.FC = () => {
     right: TRACK_WIDTH - rightHandleX.value,
   }));
 
-  // Handle video progress and looping
+  // Change: Handle video progress to pause at the end of the selection instead of looping.
   const onVideoProgress = React.useCallback(
     (prog: OnProgressData) => {
       const currentTime = prog.currentTime ?? 0;
@@ -178,14 +180,20 @@ const TrimScreen: React.FC = () => {
         const loopStart = Math.max(0, startSec);
         const loopEnd = Math.min(endSec, videoDuration);
         
-        // Always loop within the selected range
-        if (currentTime >= loopEnd - LOOP_EPS || currentTime < loopStart) {
+        // When playback reaches the end of the selection, pause and reset to the start.
+        if (currentTime >= loopEnd - LOOP_EPS) {
+          setPaused(true);
           videoRef.current?.seek(loopStart);
         }
       }
     },
     [paused, startSec, endSec, videoDuration]
   );
+  
+  // New: Function to toggle video playback.
+  const togglePlay = React.useCallback(() => {
+    setPaused(p => !p);
+  }, []);
 
   const onConfirm = React.useCallback(() => {
     const selectedDuration = endSec - startSec;
@@ -247,6 +255,7 @@ const TrimScreen: React.FC = () => {
               </Text>
             </View>
 
+            {/* Change: Added a play/pause button overlay. */}
             <View style={styles.videoWrapper}>
               {isFocused && renderVideo && sourceUri ? (
                 <Video
@@ -260,9 +269,16 @@ const TrimScreen: React.FC = () => {
                   onProgress={onVideoProgress}
                   playInBackground={false}
                   playWhenInactive={false}
-                  repeat={false} // We handle looping manually
+                  repeat={false} // Looping is now handled manually.
                 />
               ) : null}
+              {paused && (
+                <TouchableOpacity style={styles.controlsOverlay} onPress={togglePlay}>
+                  <View style={styles.playButton}>
+                    <Text style={styles.playIcon}>▶</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
             </View>
 
             <View style={styles.trimmerContainer}>
@@ -345,10 +361,33 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 8,
+    // New: Added for positioning the overlay
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   video: { 
     width: '100%', 
     height: '100%' 
+  },
+  // New: Styles for the play/pause controls.
+  controlsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  playButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playIcon: {
+    color: 'white',
+    fontSize: 24,
+    marginLeft: 4, // Optically center the play icon
   },
   trimmerContainer: { 
     paddingHorizontal: TRIMMER_PADDING - 20,
