@@ -23,12 +23,20 @@ import * as FileSystem from 'expo-file-system';
 import { BlurView } from 'expo-blur';
 import { captureRef } from 'react-native-view-shot';
 
+// Type Definitions
+type VBox = { x: number; y: number; width: number; height: number; };
+type FrameData = {
+  timestamp: number;
+  speedKPH: number;
+  boundingBox: VBox;
+};
 type SpeedResultParams = {
   maxKph: number;
   angle?: number;
   videoUri?: string;
   startSec?: number;
   endSec?: number;
+  frameData?: FrameData[];
 };
 
 const toFileUri = (p: string) => (p?.startsWith('file://') ? p : `file://${p}`);
@@ -45,8 +53,8 @@ const GlassPanel: React.FC<{ style?: any; children: React.ReactNode }> = ({
 };
 
 export default function SpeedResultScreen({ route, navigation }: any) {
-  const { maxKph, angle, videoUri, startSec, endSec } = route.params as SpeedResultParams;
-  const hasAngle = typeof angle === 'number' && isFinite(angle) && angle >= 0;
+  const { maxKph, angle, videoUri, startSec, endSec, frameData } = route.params as SpeedResultParams;
+  const hasAngle = typeof angle === 'number' && isFinite(angle);
 
   const [displaySpeed, setDisplaySpeed] = useState(0);
   const [displayAngle, setDisplayAngle] = useState(0);
@@ -127,6 +135,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
           peakSpeedKph: Math.round(maxKph),
           videoURL,
           userId: uid,
+          frameData: frameData || [],
         };
 
         await firestore().collection('users').doc(uid).collection('detections').add(detectionData);
@@ -147,7 +156,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
     } else if (!auth().currentUser) {
       setSaveStatus('not_logged_in');
     }
-  }, [maxKph, angle, hasAngle, videoUri, startSec, endSec]);
+  }, [maxKph, angle, hasAngle, videoUri, startSec, endSec, frameData]);
 
   const speedStr = useMemo(() => displaySpeed.toFixed(1), [displaySpeed]);
 
@@ -208,7 +217,9 @@ export default function SpeedResultScreen({ route, navigation }: any) {
     >
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.topBar}>
-          <View style={{ width: 44 }} />
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
+             <Ionicons name="close-outline" size={26} color="#007AFF" />
+          </TouchableOpacity>
           <TouchableOpacity onPress={onShare} style={styles.iconBtn} disabled={isSharing}>
             {isSharing ? <ActivityIndicator size="small" color="#007AFF" /> : <Ionicons name="share-outline" size={22} color="#007AFF" />}
           </TouchableOpacity>

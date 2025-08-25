@@ -346,15 +346,40 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   const finish = () => {
     triggerHaptic('heavy');
   
+    // --- FIX START ---
+    // Prepare the detailed frame data to be saved, matching the Swift model.
+    const frameDataForFirestore = frames.map((frame, index) => {
+      const box = (userBoxesByIndex[index] || [])[0] || 
+                  (frame.boxes.length > 0 ? mapModelToVideo(frame.boxes[0], vw, vh) : null);
+      
+      const speed = speedsKph[index];
+
+      if (!box || speed == null || !isFinite(speed)) {
+        return null;
+      }
+
+      return {
+        timestamp: frame.t / 1000.0, // Convert ms to seconds
+        speedKPH: speed,
+        boundingBox: {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        }
+      };
+    }).filter((item): item is FrameData => item !== null); // Remove nulls and satisfy TypeScript
+    // --- FIX END ---
+  
     navigation.navigate('SpeedResult', {
       maxKph: maxSpeed ? maxSpeed.maxKph : 0,
       angle: maxSpeed ? maxSpeed.angle : 0,
       videoUri: sourceUri,
       startSec,
       endSec,
+      frameData: frameDataForFirestore, // Pass the new data
     });
   };
-  
 
 
   const clampBox = (b: VBox): VBox => {
