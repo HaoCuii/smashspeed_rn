@@ -15,18 +15,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Share from 'react-native-share';
-import { getFirestore, collection, addDoc, serverTimestamp } from '@react-native-firebase/firestore';
-// Updated storage import - use modular API
-import { getStorage, ref, uploadBytes, getDownloadURL } from '@react-native-firebase/storage';
+
+// --- Firebase (React Native Firebase classic APIs) ---
+import firestore from '@react-native-firebase/firestore';
+import storage from '@react-native-firebase/storage';
+import auth from '@react-native-firebase/auth';
+
+// --- Video trim + FS ---
 import { trim } from 'react-native-video-trim';
-import * as FileSystem from 'expo-file-system'; // Assuming you have this library for file management
+import * as FileSystem from 'expo-file-system';
 
-import { getApp } from '@react-native-firebase/app';
-import { getAuth } from '@react-native-firebase/auth';
-
-const app = getApp();
-
-const auth = getAuth(app);
 // Optional dependencies
 let BlurView: any;
 try {
@@ -45,14 +43,16 @@ try {
 type SpeedResultParams = {
   maxKph: number;
   angle?: number;
-  videoUri?: string;
+  videoUri?: string; // expected to be a file uri (can be 'file:///...' or plain path)
   startSec?: number;
   endSec?: number;
 };
 
+const toFileUri = (p: string) => (p?.startsWith('file://') ? p : `file://${p}`);
+
 export default function SpeedResultScreen({ route, navigation }: any) {
   const { maxKph, angle, videoUri, startSec, endSec } = route.params as SpeedResultParams;
-  
+
   // Debug logging
   console.log('SpeedResultScreen params:', {
     maxKph,
@@ -61,7 +61,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
     startSec,
     endSec,
   });
-  
+
   const hasAngle = typeof angle === 'number' && isFinite(angle) && angle >= 0;
 
   // Animation states
@@ -112,20 +112,16 @@ export default function SpeedResultScreen({ route, navigation }: any) {
   useEffect(() => {
     const saveResult = async () => {
       console.log('Starting save process...');
-      
-      // Use modular API for Auth
-      const app = getApp();
-      const auth = getAuth(app);
-      const user = auth.currentUser;
-      
+
+      const user = auth().currentUser;
       console.log('Current user:', user ? 'Logged in' : 'Not logged in');
-      
+
       if (!user) {
         console.log('Setting save status to not_logged_in');
         setSaveStatus('not_logged_in');
         return;
       }
-      
+
       console.log('Checking video params:', { videoUri, startSec, endSec });
       if (!videoUri || startSec === undefined || endSec === undefined) {
         console.log('Missing video parameters, skipping save');
@@ -137,54 +133,55 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       try {
         const { uid } = user;
         const timestamp = Date.now();
-        
-        console.log('Trimming video:', { startSec, endSec });
-        const resultPath = await trim(videoUri, { 
-          startTime: startSec * 1000, 
-          endTime: endSec * 1000 
+
+        console.log('Trimming video:', { startSec, endSec, videoUri });
+        const trimmedPath = await trim(videoUri, {
+          startTime: startSec * 1000,
+          endTime: endSec * 1000,
         });
-        console.log('Video trimmed to:', resultPath);
-        
+        console.log('Video trimmed to:', trimmedPath);
+
+        // Normalize to file:// URI for putFile
+        const fileUri = toFileUri(trimmedPath);
+
         setSaveStatus('saving');
 
         const filename = `${timestamp}.mp4`;
-        console.log('Uploading to storage:', filename);
-        
-        const storage = getStorage();
-        const storageRef = ref(storage, `videos/${uid}/${filename}`);
-        
-        // Read the local file as a base64 string
-        console.log('Reading local file as Base64:', resultPath);
-        const base64Video = await FileSystem.readAsStringAsync(resultPath, {
-          encoding: FileSystem.EncodingType.Base64,
+        const remotePath = `videos/${uid}/${filename}`;
+        const ref = storage().ref(remotePath);
+
+        console.log('Uploading to storage (putFile):', remotePath, 'from', fileUri);
+
+        // Upload directly from device file (no Base64, no blob)
+        await ref.putFile(fileUri, {
+          contentType: 'video/mp4',
         });
-        
-        // Use uploadString to upload the base64 content
-        // Specify 'data_url' format as the base64 string is usually preceded by 'data:video/mp4;base64,'
-        // However, FileSystem.readAsStringAsync just returns the base64 data, so 'base64' is appropriate.
-        await uploadString(storageRef, base64Video, 'base64');
-        
-        const videoURL = await getDownloadURL(storageRef);
+
+        const videoURL = await ref.getDownloadURL();
         console.log('Video uploaded, URL:', videoURL);
 
-        // Clean up the local file after upload
-        await FileSystem.deleteAsync(resultPath).catch(console.warn);
+        // Clean up local file after upload
+        try {
+          await FileSystem.deleteAsync(fileUri, { idempotent: true });
+          console.log('Local trimmed file deleted');
+        } catch (e) {
+          console.warn('Failed to delete local file (non-fatal):', e);
+        }
 
         const detectionData = {
           angle: hasAngle ? Math.round(angle as number) : null,
-          date: serverTimestamp(),
+          date: firestore.FieldValue.serverTimestamp(),
           peakSpeedKph: Math.round(maxKph),
           videoURL,
         };
         console.log('Saving to Firestore:', detectionData);
 
-        const db = getFirestore();
-        await addDoc(collection(db, 'users', uid, 'detections'), detectionData);
+        await firestore().collection('users').doc(uid).collection('detections').add(detectionData);
         console.log('Successfully saved to Firestore');
 
         setSaveStatus('saved');
       } catch (error) {
-        console.error("Failed to save result:", error);
+        console.error('Failed to save result:', error);
         setSaveStatus('error');
       }
     };
@@ -194,10 +191,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       console.log('Video data available, attempting save');
       saveResult();
     } else {
-      // Check if user is logged in even without video
-      const app = getApp();
-      const auth = getAuth(app);
-      const user = auth.currentUser;
+      const user = auth().currentUser;
       if (!user) {
         console.log('No video data and not logged in');
         setSaveStatus('not_logged_in');
@@ -210,7 +204,9 @@ export default function SpeedResultScreen({ route, navigation }: any) {
   const speedStr = useMemo(() => displaySpeed.toFixed(1), [displaySpeed]);
 
   const goAnalyzeAnother = () => {
-    try { navigation.popToTop?.(); } catch {}
+    try {
+      navigation.popToTop?.();
+    } catch {}
     navigation.navigate('Detect');
   };
 
@@ -224,10 +220,10 @@ export default function SpeedResultScreen({ route, navigation }: any) {
     try {
       setIsSharing(true);
       setPlainGlass(true);
-      
+
       // Add watermark for sharing
       setShowWatermark(true);
-      
+
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 32)));
 
       const uri: string = await captureRef(shareCardRef.current, {
@@ -247,14 +243,13 @@ export default function SpeedResultScreen({ route, navigation }: any) {
         type: 'image/png',
       };
       await Share.open(shareOptions);
-
     } catch (error: any) {
       setShowWatermark(false);
       setPlainGlass(false);
-      if (error.message.includes('User did not share') || error.message.includes('Cancel')) {
+      if (error?.message?.includes('User did not share') || error?.message?.includes('Cancel')) {
         return;
       }
-      console.error("Share Error:", error);
+      console.error('Share Error:', error);
       Alert.alert('Share Failed', 'An error occurred while trying to share the image.');
     } finally {
       setIsSharing(false);
@@ -352,17 +347,11 @@ export default function SpeedResultScreen({ route, navigation }: any) {
                 )}
 
                 {/* Save status */}
-                {saveStatus !== 'idle' && (
-                  <View style={styles.statusWrapper}>
-                    {renderSaveStatus()}
-                  </View>
-                )}
+                {saveStatus !== 'idle' && <View style={styles.statusWrapper}>{renderSaveStatus()}</View>}
               </View>
 
               {/* Watermark for sharing only */}
-              {showWatermark && (
-                <Text style={styles.watermark}>@smashspeed</Text>
-              )}
+              {showWatermark && <Text style={styles.watermark}>@smashspeed</Text>}
             </GlassPanel>
           </View>
         </View>
@@ -383,11 +372,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 function StatusIndicator({ text, icon }: { text: string; icon: string | null }) {
   return (
     <View style={styles.statusContainer}>
-      {icon ? (
-        <Ionicons name={icon as any} size={16} color="#007AFF" />
-      ) : (
-        <ActivityIndicator size="small" color="#007AFF" />
-      )}
+      {icon ? <Ionicons name={icon as any} size={16} color="#007AFF" /> : <ActivityIndicator size="small" color="#007AFF" />}
       <Text style={styles.statusText}>{text}</Text>
     </View>
   );
@@ -405,11 +390,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  iconBtn: { 
-    width: 44, 
-    height: 44, 
-    alignItems: 'center', 
-    justifyContent: 'center' 
+  iconBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   content: {
@@ -471,32 +456,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     marginTop: 2,
   },
-  angleLabel: { 
-    fontSize: 16, 
-    color: '#6B7280', 
-    fontWeight: '600' 
+  angleLabel: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontWeight: '600',
   },
-  angleValue: { 
-    marginLeft: 'auto', 
-    fontSize: 18, 
-    fontWeight: '700', 
-    color: '#111827' 
+  angleValue: {
+    marginLeft: 'auto',
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
   },
-  angleMissing: { 
-    alignItems: 'center', 
-    paddingHorizontal: 10, 
-    paddingVertical: 2 
+  angleMissing: {
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 2,
   },
-  angleMissingTitle: { 
-    fontSize: 16, 
-    fontWeight: '700', 
-    color: '#6B7280' 
-  },
-  angleMissingNote: { 
-    fontSize: 12, 
-    color: '#6B7280', 
-    textAlign: 'center', 
-    marginTop: 4 
+  angleMissingTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#6B7280',
   },
 
   // Status styles
