@@ -407,56 +407,140 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   const interpolateFrames = () => {
     triggerHaptic('heavy');
     saveUndoState();
-    let tempUserBoxes = { ...userBoxesByIndex };
+    const tempUserBoxes = { ...userBoxesByIndex };
+
+    // Helper function to safely get a box for a given frame index
+    const getBoxForIndex = (index: number): VBox | null => {
+      // Prioritize an existing user-edited box
+      const userBox = tempUserBoxes[index]?.[0];
+      if (userBox) {
+        return userBox;
+      }
+
+      // Fall back to the first AI-detected box
+      const aiBox = frames[index]?.boxes?.[0];
+      // *** FIX IS HERE: ***
+      // Only call mapModelToVideo if an AI box actually exists on this frame.
+      if (aiBox) {
+        return mapModelToVideo(aiBox, vw, vh);
+      }
+
+      // Return null if no box of any kind is found
+      return null;
+    };
+
     let i = 0;
     while (i < frames.length - 1) {
-      const startBox = tempUserBoxes[i]?.[0] || mapModelToVideo(frames[i]?.boxes?.[0], vw, vh);
+      const startBox = getBoxForIndex(i);
+
       if (startBox) {
         let endIndex = -1;
+        // Find the next frame that has any kind of box
         for (let j = i + 1; j < frames.length; j++) {
-          const endBoxCand = tempUserBoxes[j]?.[0] || mapModelToVideo(frames[j]?.boxes?.[0], vw, vh);
-          if (endBoxCand) { endIndex = j; break; }
+          if (getBoxForIndex(j)) {
+            endIndex = j;
+            break;
+          }
         }
+
+        // Check if there is a gap of at least one frame to fill
         if (endIndex > i + 1) {
-          const endBox = tempUserBoxes[endIndex]?.[0] || mapModelToVideo(frames[endIndex]?.boxes?.[0], vw, vh);
-          const gapLength = endIndex - i;
-          for (let k = i + 1; k < endIndex; k++) {
-            if (!tempUserBoxes[k]?.[0] && !frames[k]?.boxes?.[0]) {
-              const t = (k - i) / gapLength;
-              const interpolatedBox: VBox = {
-                x: startBox.x + t * (endBox.x - startBox.x),
-                y: startBox.y + t * (endBox.y - startBox.y),
-                width: startBox.width + t * (endBox.width - startBox.width),
-                height: startBox.height + t * (endBox.height - startBox.height),
-              };
-              tempUserBoxes[k] = [interpolatedBox];
+          const endBox = getBoxForIndex(endIndex);
+
+          if (endBox) { // Should always be true, but a good safety check
+            const gapLength = endIndex - i;
+            for (let k = i + 1; k < endIndex; k++) {
+              // Check if the frame in the gap is truly empty before filling it
+              if (!getBoxForIndex(k)) {
+                const t = (k - i) / gapLength;
+                const interpolatedBox: VBox = {
+                  x: startBox.x + t * (endBox.x - startBox.x),
+                  y: startBox.y + t * (endBox.y - startBox.y),
+                  width: startBox.width + t * (endBox.width - startBox.width),
+                  height: startBox.height + t * (endBox.height - startBox.height),
+                };
+                tempUserBoxes[k] = [interpolatedBox];
+              }
             }
           }
+          // Jump the loop to the end of the gap we just filled
           i = endIndex;
-        } else { i++; }
-      } else { i++; }
+        } else {
+          i++;
+        }
+      } else {
+        i++;
+      }
     }
     setUserBoxesByIndex(tempUserBoxes);
   };
 
+  // src/screens/AnalyzeScreen.tsx
+
   const adjustBox = (dx: number, dy: number, dw: number, dh: number, pressCount: number) => {
-    if (selected?.type !== 'user') return;
-    const multiplier = pressCount < 5 ? 1 : pressCount < 15 ? 4 : 10;
-    const moveStep = (vw + vh) / 2 * 0.002 * multiplier / scale.value;
-    const resizeStep = (vw + vh) / 2 * 0.004 * multiplier / scale.value;
-    updateUserBoxes(arr => {
-      const b = arr[selected.idx];
-      if (!b) return arr;
-      const next = arr.slice();
-      next[selected.idx] = clampBox({
-        ...b,
-        x: b.x + dx * moveStep,
-        y: b.y + dy * moveStep,
-        width: b.width + dw * resizeStep,
-        height: b.height + dh * resizeStep,
+    if (!selected) return;
+
+    // If the selected box is an AI box, convert it to an editable user box
+    // and apply the first transformation in a single action.
+    if (selected.type === 'ai') {
+      const aiBoxToEdit = detectedVideoBoxes[selected.idx];
+      if (!aiBoxToEdit) return;
+
+      // Save the state before this compound action
+      if (pressCount === 0) {
+        saveUndoState();
+      }
+
+      // Calculate the amount to move/resize for this step
+      const multiplier = pressCount < 5 ? 1 : pressCount < 15 ? 4 : 10;
+      const moveStep = (vw + vh) / 2 * 0.002 * multiplier / scale.value;
+      const resizeStep = (vw + vh) / 2 * 0.004 * multiplier / scale.value;
+
+      // Create a new user box with the adjusted properties
+      const newUserBox = clampBox({
+        ...aiBoxToEdit,
+        x: aiBoxToEdit.x + dx * moveStep,
+        y: aiBoxToEdit.y + dy * moveStep,
+        width: aiBoxToEdit.width + dw * resizeStep,
+        height: aiBoxToEdit.height + dh * resizeStep,
       });
-      return next;
-    }, pressCount === 0);
+
+      // Prepare the new list of user boxes for the current frame
+      const newUserBoxesForFrame = [...userVideoBoxes, newUserBox];
+      const newUserBoxIndex = newUserBoxesForFrame.length - 1;
+      
+      // Update all relevant states at once
+      setUserBoxesByIndex(prev => ({ ...prev, [currentIndex]: newUserBoxesForFrame }));
+      setFrames(prev => {
+        const out = prev.slice();
+        out[currentIndex] = {
+          ...out[currentIndex],
+          boxes: out[currentIndex].boxes.filter((_, i) => i !== selected.idx),
+        };
+        return out;
+      });
+      setSelected({ type: 'user', idx: newUserBoxIndex });
+
+    } else { 
+      // If it's already a 'user' box, use the original editing logic
+      const multiplier = pressCount < 5 ? 1 : pressCount < 15 ? 4 : 10;
+      const moveStep = (vw + vh) / 2 * 0.002 * multiplier / scale.value;
+      const resizeStep = (vw + vh) / 2 * 0.004 * multiplier / scale.value;
+      
+      updateUserBoxes(arr => {
+        const b = arr[selected.idx];
+        if (!b) return arr;
+        const next = arr.slice();
+        next[selected.idx] = clampBox({
+          ...b,
+          x: b.x + dx * moveStep,
+          y: b.y + dy * moveStep,
+          width: b.width + dw * resizeStep,
+          height: b.height + dh * resizeStep,
+        });
+        return next;
+      }, pressCount === 0);
+    }
   };
 
   // --- Gestures and Animation ---

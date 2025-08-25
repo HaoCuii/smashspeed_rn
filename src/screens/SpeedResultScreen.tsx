@@ -84,6 +84,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
   // Firebase save states
   const [saveStatus, setSaveStatus] = useState<'idle' | 'trimming' | 'saving' | 'saved' | 'not_logged_in' | 'error'>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Animation effect
   useEffect(() => {
@@ -117,7 +118,6 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       console.log('Current user:', user ? 'Logged in' : 'Not logged in');
 
       if (!user) {
-        console.log('Setting save status to not_logged_in');
         setSaveStatus('not_logged_in');
         return;
       }
@@ -128,8 +128,8 @@ export default function SpeedResultScreen({ route, navigation }: any) {
         return;
       }
 
-      console.log('Starting video trim and upload...');
       setSaveStatus('trimming');
+      
       try {
         const { uid } = user;
         const timestamp = Date.now();
@@ -145,6 +145,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
         const fileUri = toFileUri(trimmedPath);
 
         setSaveStatus('saving');
+        setUploadProgress(0);
 
         const filename = `${timestamp}.mp4`;
         const remotePath = `videos/${uid}/${filename}`;
@@ -173,16 +174,32 @@ export default function SpeedResultScreen({ route, navigation }: any) {
           date: firestore.FieldValue.serverTimestamp(),
           peakSpeedKph: Math.round(maxKph),
           videoURL,
+          uploadedAt: serverTimestamp(),
+          userId: uid,
         };
-        console.log('Saving to Firestore:', detectionData);
 
         await firestore().collection('users').doc(uid).collection('detections').add(detectionData);
         console.log('Successfully saved to Firestore');
 
         setSaveStatus('saved');
+        setUploadProgress(100);
       } catch (error) {
         console.error('Failed to save result:', error);
         setSaveStatus('error');
+        setUploadProgress(0);
+        
+        // More specific error handling
+        if (error instanceof Error) {
+          if (error.message.includes('network') || error.message.includes('Network')) {
+            Alert.alert('Upload Failed', 'Please check your internet connection and try again.');
+          } else if (error.message.includes('permission') || error.message.includes('Permission')) {
+            Alert.alert('Upload Failed', 'Permission denied. Please check your account settings.');
+          } else if (error.message.includes('File does not exist')) {
+            Alert.alert('Upload Failed', 'Video file could not be found. Please try recording again.');
+          } else {
+            Alert.alert('Upload Failed', 'An error occurred while saving your result. Please try again.');
+          }
+        }
       }
     };
 
@@ -266,7 +283,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
       case 'trimming':
         return <StatusIndicator text="Processing video..." icon={null} />;
       case 'saving':
-        return <StatusIndicator text="Saving result..." icon={null} />;
+        return <StatusIndicator text={`Uploading... ${uploadProgress}%`} icon={null} />;
       case 'saved':
         return <StatusIndicator text="Result saved" icon="checkmark-circle" />;
       case 'not_logged_in':
