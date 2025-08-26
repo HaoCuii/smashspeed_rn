@@ -11,21 +11,33 @@ import {
   Image,
   ImageBackground,
   Modal,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { 
   getAuth, 
   onAuthStateChanged, 
   signOut as firebaseSignOut,
-  deleteUser
+  deleteUser,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  GoogleAuthProvider,
+  signInWithCredential,
 } from '@react-native-firebase/auth';
 import { 
   getFirestore,
   doc,
   deleteDoc,
 } from '@react-native-firebase/firestore';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+GoogleSignin.configure({
+  webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com', // Replace with your actual Web Client ID
+});
 
 // MARK: - Reusable Components
 const GlassPanel = ({ children, style }) => (
@@ -33,6 +45,42 @@ const GlassPanel = ({ children, style }) => (
     {children}
   </BlurView>
 );
+
+const ModernTextField = ({ placeholder, value, onChangeText, secureTextEntry = false, keyboardType = 'default' }) => {
+    const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+
+    return (
+        <View>
+            <View style={styles.textFieldContainer}>
+                <TextInput
+                    placeholder={placeholder}
+                    placeholderTextColor="#3C3C43"
+                    style={styles.textField}
+                    value={value}
+                    onChangeText={onChangeText}
+                    secureTextEntry={secureTextEntry && !isPasswordVisible}
+                    keyboardType={keyboardType}
+                    autoCapitalize="none"
+                />
+                {secureTextEntry && (
+                    <TouchableOpacity onPress={() => setIsPasswordVisible(!isPasswordVisible)} style={styles.eyeIcon}>
+                        <Icon name={isPasswordVisible ? 'visibility-off' : 'visibility'} size={24} color="#8E8E93" />
+                    </TouchableOpacity>
+                )}
+            </View>
+            <View style={styles.textFieldDivider} />
+        </View>
+    );
+};
+
+const SignInWithGoogleButton = ({ onPress }) => (
+    <TouchableOpacity style={styles.googleButton} onPress={onPress}>
+        {/* You should have a local google logo image in your assets */}
+        {/* <Image source={require('../../assets/google_logo.png')} style={styles.googleLogo} /> */}
+        <Text style={styles.googleButtonText}>Sign In with Google</Text>
+    </TouchableOpacity>
+);
+
 
 // MARK: - Settings Menu Component
 const SettingsMenu = ({ visible, onClose }) => {
@@ -113,7 +161,7 @@ const AccountView = () => {
             </TouchableOpacity>
           </View>
 
-          {authState === 'unknown' && <View style={styles.loadingContainer}><Text>Loading...</Text></View>}
+          {authState === 'unknown' && <View style={styles.loadingContainer}><ActivityIndicator size="large" /></View>}
           {authState === 'signedIn' && user && <LoggedInView user={user} />}
           {authState === 'signedOut' && <AuthView />}
 
@@ -219,22 +267,160 @@ const LoggedInView = ({ user }) => {
   );
 };
 
-// MARK: - Auth View (Placeholder)
-const AuthView = () => (
-    <ScrollView contentContainerStyle={styles.scrollViewContent}>
-        <Text style={styles.largeTitle}>Welcome</Text>
-        <GlassPanel style={styles.panel}>
-            <Text style={styles.sectionTitle}>Sign In</Text>
-            <Text style={styles.authPrompt}>Please sign in to save results and track your progress.</Text>
-        </GlassPanel>
-    </ScrollView>
-);
+// MARK: - Auth Components
+const SignInForm = ({ onSwitch }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [info, setInfo] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleSignIn = async () => {
+        if (!email || !password) return setError("Please fill in both fields.");
+        setLoading(true); setError(''); setInfo('');
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+    
+    const handlePasswordReset = async () => {
+        if (!email) return setError("Please enter your email to reset password.");
+        setLoading(true); setError(''); setInfo('');
+        try {
+            await sendPasswordResetEmail(auth, email);
+            setInfo("Password reset email sent. Please check your inbox.");
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+    
+    const handleGoogleSignIn = async () => {
+        try {
+            await GoogleSignin.hasPlayServices();
+            const { idToken } = await GoogleSignin.signIn();
+            const googleCredential = GoogleAuthProvider.credential(idToken);
+            await signInWithCredential(auth, googleCredential);
+        } catch (error) {
+            if (error.code !== statusCodes.SIGN_IN_CANCELLED) {
+                setError(error.message);
+            }
+        }
+    };
+
+    return (
+        <View style={styles.authFormContainer}>
+            <Text style={styles.authTitle}>Sign In</Text>
+            <ModernTextField placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" />
+            <ModernTextField placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+            <TouchableOpacity style={styles.forgotPasswordButton} onPress={handlePasswordReset}>
+                <Text style={styles.linkText}>Forgot Password?</Text>
+            </TouchableOpacity>
+            
+            {loading && <ActivityIndicator style={{ marginVertical: 10 }}/>}
+            {error && <Text style={styles.errorText}>{error}</Text>}
+            {info && <Text style={styles.infoText}>{info}</Text>}
+
+            <TouchableOpacity style={styles.authButton} onPress={handleSignIn} disabled={loading}>
+                <Text style={styles.authButtonText}>Sign In</Text>
+            </TouchableOpacity>
+            
+            <View style={styles.orDividerContainer}>
+                <View style={styles.orDividerLine} />
+                <Text style={styles.orDividerText}>OR</Text>
+                <View style={styles.orDividerLine} />
+            </View>
+
+            <SignInWithGoogleButton onPress={handleGoogleSignIn} />
+            
+            <TouchableOpacity style={{ marginTop: 20 }} onPress={onSwitch}>
+                <Text style={styles.linkText}>Don't have an account? Sign Up</Text>
+            </TouchableOpacity>
+        </View>
+    );
+};
+
+const CreateAccountForm = ({ onSwitch }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const isFormValid = email && password && password === confirmPassword && hasAcceptedTerms;
+
+    const handleSignUp = async () => {
+        if (password !== confirmPassword) return setError("Passwords do not match.");
+        if (!isFormValid) return;
+        setLoading(true); setError('');
+        try {
+            await createUserWithEmailAndPassword(auth, email, password);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <View style={styles.authFormContainer}>
+            <Text style={styles.authTitle}>Create Account</Text>
+            <ModernTextField placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" />
+            <ModernTextField placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+            <ModernTextField placeholder="Confirm Password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry />
+            
+            <TouchableOpacity style={styles.termsRow} onPress={() => setHasAcceptedTerms(!hasAcceptedTerms)}>
+                <Icon name={hasAcceptedTerms ? 'check-box' : 'check-box-outline-blank'} size={24} color="#007AFF" />
+                <Text style={styles.termsText}>I agree to the Terms of Service and Privacy Policy.</Text>
+            </TouchableOpacity>
+            
+            {loading && <ActivityIndicator style={{ marginVertical: 10 }}/>}
+            {error && <Text style={styles.errorText}>{error}</Text>}
+
+            <TouchableOpacity 
+                style={[styles.authButton, !isFormValid && styles.authButtonDisabled]} 
+                onPress={handleSignUp} 
+                disabled={!isFormValid || loading}
+            >
+                <Text style={styles.authButtonText}>Create Account</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={{ marginTop: 20 }} onPress={onSwitch}>
+                <Text style={styles.linkText}>Already have an account? Sign In</Text>
+            </TouchableOpacity>
+        </View>
+    );
+};
+
+// MARK: - Auth View (Container)
+const AuthView = () => {
+    const [isSigningUp, setIsSigningUp] = useState(false);
+
+    return (
+        <ScrollView contentContainerStyle={styles.scrollViewContent}>
+            <Text style={styles.largeTitle}>Welcome</Text>
+            <GlassPanel style={styles.panel}>
+                {isSigningUp 
+                    ? <CreateAccountForm onSwitch={() => setIsSigningUp(false)} /> 
+                    : <SignInForm onSwitch={() => setIsSigningUp(true)} />
+                }
+            </GlassPanel>
+            <Text style={styles.authPrompt}>Sign in to save results and track your progress.</Text>
+        </ScrollView>
+    );
+};
+
 
 // MARK: - Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'transparent', // Ensure background image is visible
   },
   safeArea: {
     flex: 1,
@@ -355,11 +541,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   authPrompt: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#3C3C43',
-    lineHeight: 22,
+    textAlign: 'center',
     paddingHorizontal: 20,
-    paddingBottom: 20,
   },
   // Styles for Settings Menu
   modalBackdrop: {
@@ -396,6 +581,115 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(60, 60, 67, 0.29)',
     marginLeft: 16,
   },
+  // MARK: - Auth Form Styles
+  authFormContainer: {
+    padding: 20,
+  },
+  authTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  textFieldContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  textField: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: 12,
+  },
+  eyeIcon: {
+    paddingLeft: 10,
+  },
+  textFieldDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(60, 60, 67, 0.29)',
+  },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    marginTop: 10,
+    marginBottom: 15,
+  },
+  linkText: {
+    color: '#007AFF',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  errorText: {
+    color: '#FF3B30',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  infoText: {
+    color: '#34C759',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  authButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginTop: 10,
+  },
+  authButtonDisabled: {
+    backgroundColor: '#E5E5EA',
+  },
+  authButtonText: {
+    color: '#FFF',
+    textAlign: 'center',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  orDividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  orDividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(60, 60, 67, 0.29)',
+  },
+  orDividerText: {
+    marginHorizontal: 10,
+    color: '#8E8E93',
+    fontSize: 13,
+  },
+  googleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60, 60, 67, 0.29)',
+  },
+  googleLogo: {
+    width: 18,
+    height: 18,
+    marginRight: 10,
+  },
+  googleButtonText: {
+    color: '#000',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 15,
+    marginBottom: 10,
+    gap: 10,
+  },
+  termsText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#3C3C43',
+    lineHeight: 18,
+  }
 });
 
 export default AccountView;
