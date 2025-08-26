@@ -21,7 +21,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-na
 import Slider from '@react-native-community/slider';
 import HapticFeedback, { HapticFeedbackTypes } from 'react-native-haptic-feedback';
 import { HapticFeedbackTypes as HapticConstants } from 'react-native-haptic-feedback';
-import Ionicons from 'react-native-vector-icons/Ionicons';
+import Ionicons from 'react-native-vector-icons/Ionicons'; // MODIFICATION: Import icons
 
 // --- Type Definitions ---
 type AnalyzeParams = {
@@ -68,7 +68,7 @@ const RepeatingFineTuneButton = ({
   icon,
   onPress,
 }: {
-  icon: React.ReactNode;
+  icon: React.ReactNode; // MODIFICATION: Changed from string to ReactNode
   onPress: (pressCount: number) => void;
 }) => {
   const [isPressing, setIsPressing] = useState(false);
@@ -134,7 +134,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const [userBoxesByIndex, setUserBoxesByIndex] = useState<Record<number, VBox[]>>({});
   const [selected, setSelected] = useState<Selected | null>(null);
-  const [showTuningControls, setShowTuningControls] = useState(false);
+  const [showTuningControls, setShowTuningControls] = useState(false); // MODIFICATION: Closed by default
   const [editMode, setEditMode] = useState<EditMode>('move');
 
   const [undoStack, setUndoStack] = useState<UndoState[]>([]);
@@ -255,14 +255,10 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   }, [frames, seekToIndex]);
 
   const current = frames.length ? frames[Math.max(0, Math.min(currentIndex, frames.length - 1))] : null;
-
   const detectedVideoBoxes = useMemo(() => {
     if (!current || !vw || !vh) return [];
-    // FIX: Removed .slice(0, 1) to allow all detected boxes to be rendered,
-    // not just the one with the highest confidence score.
-    return current.boxes.map(b => mapModelToVideo(b, vw, vh));
+    return current.boxes.map(b => mapModelToVideo(b, vw, vh)).slice(0, 1);
   }, [current, vw, vh]);
-
   const userVideoBoxes: VBox[] = userBoxesByIndex[currentIndex] || [];
   const videoToScreenScale = useMemo(() => (!vw || !vh) ? 1 : Math.min(drawRect.w / vw, drawRect.h / vh), [drawRect, vw, vh]);
   const toScreen = (b: VBox) => ({
@@ -324,6 +320,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
       }
     }
   
+    // Calculate angle at max speed frame
     let angle = 0;
     if (best.atIndex >= 0 && best.atIndex < centers.length - 1) {
       const current = centers[best.atIndex];
@@ -332,24 +329,63 @@ export default function AnalyzeScreen({ route, navigation }: any) {
         const dx = next.x - current.x;
         const dy = next.y - current.y;
         angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        if (angle < 0) angle += 360;
+        if (angle < 0) angle += 360; // normalize to 0-360
       }
     }
   
     return best.maxKph === -Infinity ? null : { ...best, angle };
   }, [speedsKph, centers]);
   
-  const finish = () => {
-    triggerHaptic('heavy');
-    navigation.navigate('SpeedResult', {
-      maxKph: maxSpeed ? maxSpeed.maxKph : 0,
-      angle: maxSpeed ? maxSpeed.angle : 0,
-      videoUri: sourceUri,
-      startSec,
-      endSec,
-    });
-  };
+  // In AnalyzeScreen.tsx
+
+const finish = () => {
+  triggerHaptic('heavy');
+
+  // --- START: Added Code ---
+  // Construct the detailed frame data for upload
+  const frameDataForUpload = frames.map((frame, i) => {
+    const speedKPH = speedsKph[i];
+    // Skip any frames that don't have a valid speed calculated
+    if (speedKPH === null || !Number.isFinite(speedKPH)) {
+      return null;
+    }
+
+    let boundingBox = null;
+    const userBox = userBoxesByIndex[i]?.[0];
+
+    if (userBox) {
+      // Prioritize the user-edited box if it exists
+      boundingBox = userBox;
+    } else if (frame.boxes.length > 0 && vw > 0 && vh > 0) {
+      // Fall back to the first AI-detected box
+      boundingBox = mapModelToVideo(frame.boxes[0], vw, vh);
+    }
+
+    // Skip any frames where no bounding box could be found
+    if (!boundingBox) {
+      return null;
+    }
+
+    return {
+      timestamp: frame.t / 1000, // Convert from ms to seconds
+      speedKPH: speedKPH,
+      boundingBox: boundingBox,
+    };
+  }).filter(Boolean); // Remove any null entries from the array
+  // --- END: Added Code ---
+
+  navigation.navigate('SpeedResult', {
+    maxKph: maxSpeed ? maxSpeed.maxKph : 0,
+    angle: maxSpeed ? maxSpeed.angle : 0,
+    videoUri: sourceUri,
+    startSec,
+    endSec,
+    frameData: frameDataForUpload, // Pass the newly constructed data
+  });
+};
   
+
+
   const clampBox = (b: VBox): VBox => {
     if (!vw || !vh) return b;
     const width = Math.max(2, Math.min(b.width, vw));
@@ -404,20 +440,28 @@ export default function AnalyzeScreen({ route, navigation }: any) {
     return false;
   }, [frames, userBoxesByIndex]);
 
-  const interpolateFrames = useCallback(() => {
+  const interpolateFrames = () => {
     triggerHaptic('heavy');
     saveUndoState();
     const tempUserBoxes = { ...userBoxesByIndex };
 
+    // Helper function to safely get a box for a given frame index
     const getBoxForIndex = (index: number): VBox | null => {
+      // Prioritize an existing user-edited box
       const userBox = tempUserBoxes[index]?.[0];
       if (userBox) {
         return userBox;
       }
+
+      // Fall back to the first AI-detected box
       const aiBox = frames[index]?.boxes?.[0];
-      if (aiBox && vw > 0 && vh > 0) {
+      // *** FIX IS HERE: ***
+      // Only call mapModelToVideo if an AI box actually exists on this frame.
+      if (aiBox) {
         return mapModelToVideo(aiBox, vw, vh);
       }
+
+      // Return null if no box of any kind is found
       return null;
     };
 
@@ -427,6 +471,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
 
       if (startBox) {
         let endIndex = -1;
+        // Find the next frame that has any kind of box
         for (let j = i + 1; j < frames.length; j++) {
           if (getBoxForIndex(j)) {
             endIndex = j;
@@ -434,11 +479,14 @@ export default function AnalyzeScreen({ route, navigation }: any) {
           }
         }
 
+        // Check if there is a gap of at least one frame to fill
         if (endIndex > i + 1) {
           const endBox = getBoxForIndex(endIndex);
-          if (endBox) {
+
+          if (endBox) { // Should always be true, but a good safety check
             const gapLength = endIndex - i;
             for (let k = i + 1; k < endIndex; k++) {
+              // Check if the frame in the gap is truly empty before filling it
               if (!getBoxForIndex(k)) {
                 const t = (k - i) / gapLength;
                 const interpolatedBox: VBox = {
@@ -451,6 +499,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
               }
             }
           }
+          // Jump the loop to the end of the gap we just filled
           i = endIndex;
         } else {
           i++;
@@ -460,23 +509,30 @@ export default function AnalyzeScreen({ route, navigation }: any) {
       }
     }
     setUserBoxesByIndex(tempUserBoxes);
-  }, [userBoxesByIndex, frames, vw, vh, saveUndoState]); // FIX: Added useCallback and dependencies
+  };
+
+  // src/screens/AnalyzeScreen.tsx
 
   const adjustBox = (dx: number, dy: number, dw: number, dh: number, pressCount: number) => {
     if (!selected) return;
 
+    // If the selected box is an AI box, convert it to an editable user box
+    // and apply the first transformation in a single action.
     if (selected.type === 'ai') {
       const aiBoxToEdit = detectedVideoBoxes[selected.idx];
       if (!aiBoxToEdit) return;
 
+      // Save the state before this compound action
       if (pressCount === 0) {
         saveUndoState();
       }
 
+      // Calculate the amount to move/resize for this step
       const multiplier = pressCount < 5 ? 1 : pressCount < 15 ? 4 : 10;
       const moveStep = (vw + vh) / 2 * 0.002 * multiplier / scale.value;
       const resizeStep = (vw + vh) / 2 * 0.004 * multiplier / scale.value;
 
+      // Create a new user box with the adjusted properties
       const newUserBox = clampBox({
         ...aiBoxToEdit,
         x: aiBoxToEdit.x + dx * moveStep,
@@ -485,21 +541,24 @@ export default function AnalyzeScreen({ route, navigation }: any) {
         height: aiBoxToEdit.height + dh * resizeStep,
       });
 
+      // Prepare the new list of user boxes for the current frame
       const newUserBoxesForFrame = [...userVideoBoxes, newUserBox];
       const newUserBoxIndex = newUserBoxesForFrame.length - 1;
       
+      // Update all relevant states at once
       setUserBoxesByIndex(prev => ({ ...prev, [currentIndex]: newUserBoxesForFrame }));
       setFrames(prev => {
         const out = prev.slice();
-        // Create a new array of boxes instead of filtering the original
-        const originalBoxes = out[currentIndex].boxes;
-        const newBoxes = originalBoxes.filter((_, i) => i !== selected.idx);
-        out[currentIndex] = { ...out[currentIndex], boxes: newBoxes };
+        out[currentIndex] = {
+          ...out[currentIndex],
+          boxes: out[currentIndex].boxes.filter((_, i) => i !== selected.idx),
+        };
         return out;
       });
       setSelected({ type: 'user', idx: newUserBoxIndex });
 
     } else { 
+      // If it's already a 'user' box, use the original editing logic
       const multiplier = pressCount < 5 ? 1 : pressCount < 15 ? 4 : 10;
       const moveStep = (vw + vh) / 2 * 0.002 * multiplier / scale.value;
       const resizeStep = (vw + vh) / 2 * 0.004 * multiplier / scale.value;
@@ -704,22 +763,26 @@ export default function AnalyzeScreen({ route, navigation }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safeArea: { flex: 1 },
+  // Top Bar
   topBarContainer: { height: 44, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderColor: '#D1D1D6' },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, flex: 1 },
   topBarSection: { flexDirection: 'row', alignItems: 'center', gap: 20, flex: 1 },
-  iconBtn: { color: '#007AFF', fontSize: 26 },
+  iconBtn: { color: '#007AFF', fontSize: 26 }, // MODIFICATION: New icon style
   topBarTitle: { color: '#000', fontSize: 17, fontWeight: '600' },
+  // Video & Boxes
   videoContainer: { width: '100%', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' },
   box: { position: 'absolute', borderWidth: 2, backgroundColor: 'transparent' },
   detBox: { borderColor: 'rgba(255, 69, 58, 0.8)' },
   userBox: { borderColor: 'rgba(10, 215, 255, 0.8)' },
   selBox: { borderColor: '#FF9500', borderWidth: 3 },
+  // Interpolation
   interpContainer: { borderBottomWidth: 1, borderColor: '#D1D1D6', backgroundColor: 'rgba(255, 226, 183, 0.5)' },
   interpContent: { padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   interpTitle: { color: '#BF5A00', fontWeight: 'bold', fontSize: 14 },
   interpSub: { color: '#BF5A00', fontSize: 13, opacity: 0.8 },
   interpBtn: { backgroundColor: '#A259FF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   interpBtnTxt: { color: '#FFF', fontWeight: '700', fontSize: 13 },
+  // Controls ScrollView
   controlsContainer: { padding: 16, gap: 16, paddingBottom: 120 },
   panel: { 
     backgroundColor: '#FFFFFF', 
@@ -732,21 +795,23 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   sectionHeader: { color: '#6D6D72', fontSize: 13, fontWeight: '600', marginBottom: 16 },
+  // Navigation Panel
   speedReadout: { alignItems: 'center', marginBottom: 10 },
   speedLabel: { color: '#6D6D72', fontSize: 13, fontWeight: '500' },
-  infoIcon: { color: '#007AFF', fontSize: 18 },
+  infoIcon: { color: '#007AFF', fontSize: 18 }, // MODIFICATION: Adjusted size
   speedValue: { color: '#000', fontSize: 28, fontWeight: '700' },
   speedUnit: { fontSize: 20, color: '#6D6D72' },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  navArrowIcon: { color: '#007AFF', fontSize: 40 },
+  navArrowIcon: { color: '#007AFF', fontSize: 40 }, // MODIFICATION: New icon style
   glowEffect: { shadowColor: '#007AFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   divider: { height: 1, backgroundColor: '#E5E5EA', marginVertical: 12 },
   toggleBtn: { paddingVertical: 4, alignItems: 'center' },
   toggleBtnText: { color: '#6D6D72', fontSize: 13, fontWeight: '500' },
   aiWarning: { color: '#6D6D72', fontSize: 12, textAlign: 'center', marginTop: 8, paddingHorizontal: 10 },
+  // Manual Panel
   manualHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   actionBtn: { paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
-  actionBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  actionBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 }, // MODIFICATION: New style for button content
   addBtn: { backgroundColor: '#007AFF' },
   removeBtn: { backgroundColor: '#FF9500' },
   actionBtnTxt: { color: '#FFF', fontWeight: '600', fontSize: 16 },
@@ -759,11 +824,13 @@ const styles = StyleSheet.create({
   resizeLabel: { color: '#000', fontWeight: '600', width: 60, textAlign: 'center' },
   fineTuneBtn: { width: 64, height: 48, backgroundColor: '#E5E5EA', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   fineTuneBtnActive: { backgroundColor: '#D1D1D6' },
+  // Bottom Bar
   bottomBarContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingBottom: 34, paddingTop: 12, paddingHorizontal: 16, gap: 14, borderTopWidth: 1, borderColor: '#D1D1D6', backgroundColor: '#FFFFFF' },
   finishBtn: { backgroundColor: '#007AFF', paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
   finishBtnTxt: { color: '#FFF', fontSize: 17, fontWeight: '600' },
   recalibrateTxt: { color: '#007AFF', textAlign: 'center', fontSize: 15 },
   btnDisabled: { opacity: 0.3 },
+  // Overlays
   loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'center', alignItems: 'center' },
   loadingText: { color: '#fff', marginTop: 15, fontSize: 16 },
 });
