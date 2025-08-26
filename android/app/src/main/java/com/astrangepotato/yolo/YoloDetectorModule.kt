@@ -2,6 +2,7 @@ package com.astrangepotato.yolo
 
 import android.graphics.*
 import android.media.*
+import android.media.Image
 import android.net.Uri
 import android.util.Log
 import android.view.Surface
@@ -15,21 +16,32 @@ import java.lang.StringBuilder
 class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
+    // ORT
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
     private var inputName: String? = null
 
-    // Reusable buffers
+    // Model input
     private val MODEL_W = 640
     private val MODEL_H = 640
+
+    // Reusable buffers
     private var dstBitmapCache: Bitmap? = null
     private var pixelsCache: IntArray? = null
     private var floatCache: FloatArray? = null
     private val sharedMatrix = Matrix()
     private val sharedPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    // Letterbox cache (recompute only when src size/rotation changes)
+    private var lastSrcW = -1
+    private var lastSrcH = -1
+    private var rotationDegreesForMatrix = 0
+
     private val DEBUG_TAG = "YOLO_DEBUG"
 
     override fun getName() = "YoloDetector"
+
+    // ---------------- ORT warmup ----------------
 
     @ReactMethod
     fun warmup(promise: Promise) {
@@ -46,6 +58,8 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ---------------- Detection ----------------
+
     @ReactMethod
     fun detectVideo(path: String, fps: Int, startSec: Double, endSec: Double, promise: Promise) {
         Thread {
@@ -53,38 +67,45 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
             var codec: MediaCodec? = null
             var imageReader: ImageReader? = null
             var surface: Surface? = null
-            // *** THE FIX IS HERE: We use MediaMetadataRetriever once to get the FPS ***
             val metaRetriever = MediaMetadataRetriever()
 
             try {
                 val uri = Uri.parse(path)
-                
-                // --- Get Video Metadata (including FPS) ---
+
+                // --- Metadata (needed for rotation heuristics) ---
                 if (uri.scheme == "content" || uri.scheme == "file") {
                     metaRetriever.setDataSource(reactContext, uri)
                 } else {
                     metaRetriever.setDataSource(path)
                 }
-                
-                val videoW = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                val videoH = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                
+                val metaW = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                    ?: 0
+                val metaH = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                    ?: 0
+                val metaRotation =
+                    metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                        ?: 0
+
+                // --- FPS selection ---
                 val targetFps = if (fps > 0) {
                     fps
                 } else {
-                    val capRate = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toFloatOrNull()
-                    val frameCount = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull()
-                    val durationMs = metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                    val capRate =
+                        metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toFloatOrNull()
+                    val frameCount =
+                        metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull()
+                    val durationMs =
+                        metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                     when {
                         capRate != null && capRate > 0f -> capRate.toInt()
                         frameCount != null && durationMs != null && durationMs > 0 -> (frameCount * 1000 / durationMs).toInt()
-                        else -> 30 // Default fallback
+                        else -> 30
                     }
                 }.coerceAtLeast(1)
 
                 Log.d(DEBUG_TAG, "Processing video at $targetFps FPS.")
-                
-                // 1. --- Initialize MediaExtractor ---
+
+                // --- MediaExtractor / track ---
                 extractor = MediaExtractor()
                 if (uri.scheme == "content" || uri.scheme == "file") {
                     extractor.setDataSource(reactContext, uri, null)
@@ -92,7 +113,6 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                     extractor.setDataSource(path)
                 }
 
-                // 2. --- Find Video Track and Configure Decoder ---
                 var trackFormat: MediaFormat? = null
                 var videoTrackIndex = -1
                 for (i in 0 until extractor.trackCount) {
@@ -104,13 +124,17 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                         break
                     }
                 }
-
                 if (videoTrackIndex == -1 || trackFormat == null) {
                     throw RuntimeException("No video track found in file")
                 }
 
                 extractor.selectTrack(videoTrackIndex)
-                imageReader = ImageReader.newInstance(videoW, videoH, 35, 2) // 35 = YUV_420_888
+
+                // Preferred size for ImageReader: coded size if available, else metadata size
+                val codedW = if (trackFormat.containsKey(MediaFormat.KEY_WIDTH)) trackFormat.getInteger(MediaFormat.KEY_WIDTH) else metaW
+                val codedH = if (trackFormat.containsKey(MediaFormat.KEY_HEIGHT)) trackFormat.getInteger(MediaFormat.KEY_HEIGHT) else metaH
+
+                imageReader = ImageReader.newInstance(codedW, codedH, ImageFormat.YUV_420_888, 2)
                 surface = imageReader.surface
 
                 val mimeType = trackFormat.getString(MediaFormat.KEY_MIME)!!
@@ -118,24 +142,14 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                 codec.configure(trackFormat, surface, null, 0)
                 codec.start()
 
-                // 3. --- Prepare for processing loop ---
-                val scale = minOf(MODEL_W.toFloat() / videoW, MODEL_H.toFloat() / videoH)
-                val dW = (videoW * scale).toInt()
-                val dH = (videoH * scale).toInt()
-                val left = (MODEL_W - dW) / 2f
-                val top = (MODEL_H - dH) / 2f
-                sharedMatrix.reset()
-                sharedMatrix.postScale(scale, scale)
-                sharedMatrix.postTranslate(left, top)
-
+                // Model buffers
                 val plane = MODEL_W * MODEL_H
-                dstBitmapCache = Bitmap.createBitmap(MODEL_W, MODEL_H, Bitmap.Config.ARGB_8888)
-                pixelsCache = IntArray(plane)
-                floatCache = FloatArray(3 * plane)
+                if (dstBitmapCache == null) dstBitmapCache = Bitmap.createBitmap(MODEL_W, MODEL_H, Bitmap.Config.ARGB_8888)
+                if (pixelsCache == null) pixelsCache = IntArray(plane)
+                if (floatCache == null) floatCache = FloatArray(3 * plane)
 
                 val startUs = (startSec * 1_000_000).toLong()
                 val endUs = (endSec * 1_000_000).toLong()
-                // --- Use the correctly detected targetFps ---
                 val frameIntervalUs = 1_000_000L / targetFps
                 var nextFrameUs = startUs
 
@@ -145,54 +159,93 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                 var inputDone = false
                 var outputDone = false
 
-                // 4. --- Decoding and Inference Loop ---
+                // Rotation from track if present
+                val trackRotation =
+                    if (trackFormat.containsKey(MediaFormat.KEY_ROTATION)) trackFormat.getInteger(MediaFormat.KEY_ROTATION) else 0
+
+                // --- Decode loop ---
                 while (!outputDone) {
+                    // Feed input
                     if (!inputDone) {
-                        val inputBufIndex = codec.dequeueInputBuffer(10000)
-                        if (inputBufIndex >= 0) {
-                            val inputBuf = codec.getInputBuffer(inputBufIndex)!!
-                            val sampleSize = extractor.readSampleData(inputBuf, 0)
+                        val inIndex = codec.dequeueInputBuffer(10000)
+                        if (inIndex >= 0) {
+                            val inBuf = codec.getInputBuffer(inIndex)!!
+                            val sampleSize = extractor.readSampleData(inBuf, 0)
                             if (sampleSize < 0) {
-                                codec.queueInputBuffer(inputBufIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                codec.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputDone = true
                             } else {
-                                val presentationTimeUs = extractor.sampleTime
-                                codec.queueInputBuffer(inputBufIndex, 0, sampleSize, presentationTimeUs, 0)
+                                val pts = extractor.sampleTime
+                                codec.queueInputBuffer(inIndex, 0, sampleSize, pts, 0)
                                 extractor.advance()
                             }
                         }
                     }
 
-                    val outputBufIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
-                    if (outputBufIndex >= 0) {
+                    // Drain output
+                    val outIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                    if (outIndex >= 0) {
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                             outputDone = true
                         }
 
                         val doRender = bufferInfo.size > 0
                         if (doRender && bufferInfo.presentationTimeUs >= nextFrameUs) {
-                            codec.releaseOutputBuffer(outputBufIndex, true)
-                            val image = imageReader.acquireNextImage()
-                            
-                            if (image != null) {
-                                val bmp = imageToBitmap(image)
-                                val chw = preprocessLetterbox640_reuse(bmp, dstBitmapCache!!, pixelsCache!!, floatCache!!, sharedMatrix, sharedPaint)
-                                val dets = runOrtDecodeNms(chw)
-                                logDetections(bufferInfo.presentationTimeUs, dets)
-                                val item = Arguments.createMap().apply {
-                                    putDouble("t", bufferInfo.presentationTimeUs / 1000.0)
-                                    putArray("boxes", detsToWritable(dets))
+                            // Render to surface to produce an Image
+                            codec.releaseOutputBuffer(outIndex, true)
+
+                            // Try to acquire the rendered image (simple short spin)
+                            var image: Image? = imageReader.acquireNextImage()
+                            if (image == null) {
+                                // small wait loop; avoids racing the frame on some devices
+                                val startWait = System.nanoTime()
+                                while (image == null && (System.nanoTime() - startWait) < 3_000_000) { // ~3ms
+                                    image = imageReader.acquireNextImage()
                                 }
-                                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("onFrameDetected", item)
-                                bmp.recycle()
-                                image.close()
+                            }
+
+                            if (image != null) {
+                                try {
+                                    val bmp = imageToBitmap(image)
+
+                                    // Decide whether to apply rotation for matrix
+                                    // Heuristic: if decoder didn’t rotate, bmp dims match unrotated meta/coded dims
+                                    val rotationMaybe =
+                                        if ((bmp.width == codedW && bmp.height == codedH) && (trackRotation != 0 || metaRotation != 0))
+                                            (if (trackRotation != 0) trackRotation else metaRotation)
+                                        else 0
+
+                                    ensureLetterboxMatrixFor(bmp.width, bmp.height, rotationMaybe)
+
+                                    val chw = preprocessLetterbox640_reuse(
+                                        bmp,
+                                        dstBitmapCache!!,
+                                        pixelsCache!!,
+                                        floatCache!!,
+                                        sharedMatrix,
+                                        sharedPaint
+                                    )
+                                    val dets = runOrtDecodeNms(chw)
+                                    logDetections(bufferInfo.presentationTimeUs, dets)
+
+                                    val item = Arguments.createMap().apply {
+                                        putDouble("t", bufferInfo.presentationTimeUs / 1000.0)
+                                        putArray("boxes", detsToWritable(dets))
+                                    }
+                                    reactContext
+                                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                        .emit("onFrameDetected", item)
+
+                                } finally {
+                                    image.close()
+                                }
                                 nextFrameUs += frameIntervalUs
                             }
                         } else {
-                           codec.releaseOutputBuffer(outputBufIndex, false)
+                            codec.releaseOutputBuffer(outIndex, false)
                         }
 
-                         if (bufferInfo.presentationTimeUs > endUs) {
+                        if (bufferInfo.presentationTimeUs > endUs) {
                             outputDone = true
                         }
                     }
@@ -206,70 +259,111 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                 emitError(e.message ?: "Unknown video processing error")
                 promise.reject("detect_error", e)
             } finally {
-                // 5. --- Cleanup ---
-                metaRetriever.release() // Make sure to release the retriever
                 surface?.release()
                 imageReader?.close()
                 codec?.stop()
                 codec?.release()
                 extractor?.release()
+                metaRetriever.release()
             }
         }.start()
     }
-    
+
+    // ---------------- YUV_420_888 → Bitmap (stride-aware) ----------------
+
     private fun imageToBitmap(image: Image): Bitmap {
-        val planes = image.planes
-        val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
-        val vBuffer = planes[2].buffer
-    
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-    
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-    
-        val yuvImage = YuvImage(nv21, 17, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 100, out)
-        val imageBytes = out.toByteArray()
-        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-    }
-    
-    private fun logDetections(tUs: Long, dets: List<WritableMap>) {
-        if (dets.isNotEmpty()) {
-            val logMessage = StringBuilder()
-            logMessage.append("Frame at ${"%.2f".format(tUs / 1000.0)} ms -> Found ${dets.size} detections:\n")
-            dets.take(3).forEachIndexed { index, box ->
-                val x = box.getDouble("x")
-                val y = box.getDouble("y")
-                val w = box.getDouble("width")
-                val h = box.getDouble("height")
-                logMessage.append("  Box $index: [x=${"%.1f".format(x)}, y=${"%.1f".format(y)}, w=${"%.1f".format(w)}, h=${"%.1f".format(h)}]\n")
-            }
-            Log.d(DEBUG_TAG, logMessage.toString())
-        } else {
-            Log.d(DEBUG_TAG, "Frame at ${"%.2f".format(tUs / 1000.0)} ms -> Found 0 detections.")
+        val width = image.width
+        val height = image.height
+
+        // Allocate NV21 (Y + interleaved VU)
+        val nv21 = ByteArray(width * height * 3 / 2)
+
+        // ---- Y plane (row-by-row; handle rowStride) ----
+        val yPlane = image.planes[0]
+        val yBuffer = yPlane.buffer.duplicate()
+        val yRowStride = yPlane.rowStride
+        var outPos = 0
+        for (row in 0 until height) {
+            yBuffer.position(row * yRowStride)
+            yBuffer.get(nv21, outPos, width)
+            outPos += width
         }
+
+        // ---- U/V planes (respect rowStride & pixelStride; write V then U for NV21) ----
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        val uBuffer = uPlane.buffer.duplicate()
+        val vBuffer = vPlane.buffer.duplicate()
+
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane.pixelStride
+
+        outPos = width * height
+        val chromaHeight = height / 2
+        val chromaWidth = width / 2
+        for (row in 0 until chromaHeight) {
+            val uRowStart = row * uRowStride
+            val vRowStart = row * vRowStride
+            for (col in 0 until chromaWidth) {
+                val v = vBuffer.get(vRowStart + col * vPixelStride)
+                val u = uBuffer.get(uRowStart + col * uPixelStride)
+                nv21[outPos++] = v
+                nv21[outPos++] = u
+            }
+        }
+
+        // Convert NV21 → JPEG → Bitmap (simple & portable)
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+        val bytes = out.toByteArray()
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
 
-    private fun emitComplete() {
-        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("onDetectionComplete", null)
+    // ---------------- Letterbox matrix from actual frame ----------------
+
+    private fun ensureLetterboxMatrixFor(srcW: Int, srcH: Int, rotationDegrees: Int = 0) {
+        if (srcW == lastSrcW && srcH == lastSrcH && rotationDegrees == rotationDegreesForMatrix) return
+
+        // Dimensions *after* rotation (used for scale)
+        val rotW = if (rotationDegrees % 180 == 0) srcW else srcH
+        val rotH = if (rotationDegrees % 180 == 0) srcH else srcW
+        val scale = minOf(MODEL_W.toFloat() / rotW, MODEL_H.toFloat() / rotH)
+
+        sharedMatrix.reset()
+        // Move bitmap center to origin
+        sharedMatrix.postTranslate(-srcW / 2f, -srcH / 2f)
+        // Rotate around center if needed
+        if (rotationDegrees != 0) {
+            sharedMatrix.postRotate(rotationDegrees.toFloat())
+        }
+        // Uniform scale to fit into 640x640
+        sharedMatrix.postScale(scale, scale)
+        // Center into destination canvas
+        sharedMatrix.postTranslate(MODEL_W / 2f, MODEL_H / 2f)
+
+        lastSrcW = srcW
+        lastSrcH = srcH
+        rotationDegreesForMatrix = rotationDegrees
     }
 
-    private fun emitError(message: String) {
-        val map = Arguments.createMap().apply { putString("message", message) }
-        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("onDetectionError", map)
-    }
+    // ---------------- ORT post-processing & helpers ----------------
 
-    private fun preprocessLetterbox640_reuse(src: Bitmap, dst: Bitmap, pixels: IntArray, out: FloatArray, mtx: Matrix, paint: Paint): FloatArray {
+    private fun preprocessLetterbox640_reuse(
+        src: Bitmap,
+        dst: Bitmap,
+        pixels: IntArray,
+        out: FloatArray,
+        mtx: Matrix,
+        paint: Paint
+    ): FloatArray {
         val canvas = Canvas(dst)
         canvas.drawColor(Color.rgb(114, 114, 114))
         canvas.drawBitmap(src, mtx, paint)
         dst.getPixels(pixels, 0, MODEL_W, 0, 0, MODEL_W, MODEL_H)
+
         val plane = MODEL_W * MODEL_H
         var r = 0; var g = plane; var b = 2 * plane; var p = 0
         for (y in 0 until MODEL_H) {
@@ -277,7 +371,7 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                 val px = pixels[p++]
                 out[r++] = ((px shr 16) and 0xFF) / 255f
                 out[g++] = ((px shr 8) and 0xFF) / 255f
-                out[b++] = ( px and 0xFF) / 255f
+                out[b++] = (px and 0xFF) / 255f
             }
         }
         return out
@@ -293,29 +387,29 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
                 val raw = result[0].value
                 @Suppress("UNCHECKED_CAST")
                 val rows: Array<FloatArray> = when (raw) {
-                  is Array<*> -> {
-                    val a = raw.getOrNull(0)
-                    when (a) {
-                      is Array<*> -> {
-                        val arr = a as Array<FloatArray>
-                        if (arr.isNotEmpty()) {
-                          val dim0 = arr.size
-                          val dim1 = arr[0].size
-                          if (dim0 < dim1 && dim0 <= 256) {
-                            val K = dim0
-                            val N = dim1
-                            Array(N) { i -> FloatArray(K) { k -> arr[k][i] } }
-                          } else {
-                            arr
-                          }
-                        } else emptyArray()
-                      }
-                      is FloatArray -> arrayOf(a)
-                      else -> error("Unexpected ONNX output element type: ${a?.javaClass}")
+                    is Array<*> -> {
+                        val a = raw.getOrNull(0)
+                        when (a) {
+                            is Array<*> -> {
+                                val arr = a as Array<FloatArray>
+                                if (arr.isNotEmpty()) {
+                                    val dim0 = arr.size
+                                    val dim1 = arr[0].size
+                                    if (dim0 < dim1 && dim0 <= 256) {
+                                        val K = dim0
+                                        val N = dim1
+                                        Array(N) { i -> FloatArray(K) { k -> arr[k][i] } }
+                                    } else {
+                                        arr
+                                    }
+                                } else emptyArray()
+                            }
+                            is FloatArray -> arrayOf(a)
+                            else -> error("Unexpected ONNX output element type: ${a?.javaClass}")
+                        }
                     }
-                  }
-                  is FloatArray -> arrayOf(raw)
-                  else -> error("Unexpected ONNX output type: ${raw?.javaClass}")
+                    is FloatArray -> arrayOf(raw)
+                    else -> error("Unexpected ONNX output type: ${raw?.javaClass}")
                 }
 
                 val confThresh = 0.15f
@@ -377,5 +471,35 @@ class YoloDetectorModule(private val reactContext: ReactApplicationContext) :
         val arr = Arguments.createArray()
         list.forEach { arr.pushMap(it) }
         return arr
+    }
+
+    private fun logDetections(tUs: Long, dets: List<WritableMap>) {
+        if (dets.isNotEmpty()) {
+            val logMessage = StringBuilder()
+            logMessage.append("Frame at ${"%.2f".format(tUs / 1000.0)} ms -> Found ${dets.size} detections:\n")
+            dets.take(3).forEachIndexed { index, box ->
+                val x = box.getDouble("x")
+                val y = box.getDouble("y")
+                val w = box.getDouble("width")
+                val h = box.getDouble("height")
+                logMessage.append("  Box $index: [x=${"%.1f".format(x)}, y=${"%.1f".format(y)}, w=${"%.1f".format(w)}, h=${"%.1f".format(h)}]\n")
+            }
+            Log.d(DEBUG_TAG, logMessage.toString())
+        } else {
+            Log.d(DEBUG_TAG, "Frame at ${"%.2f".format(tUs / 1000.0)} ms -> Found 0 detections.")
+        }
+    }
+
+    private fun emitComplete() {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("onDetectionComplete", null)
+    }
+
+    private fun emitError(message: String) {
+        val map = Arguments.createMap().apply { putString("message", message) }
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("onDetectionError", map)
     }
 }

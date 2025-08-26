@@ -11,10 +11,6 @@ class KalmanTracker(val scaleFactor: Double) {
     private var x = doubleArrayOf(0.0, 0.0, 0.0, 0.0)
 
     // State covariance matrix P (row-major 4x4)
-    // [ p00 p01 p02 p03
-    //   p10 p11 p12 p13
-    //   p20 p21 p22 p23
-    //   p30 p31 p32 p33 ]
     private var p = doubleArrayOf(
         1.0, 0.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 0.0,
@@ -78,10 +74,10 @@ class KalmanTracker(val scaleFactor: Double) {
         val y1 = measurement.y - x[1]
 
         // S = H P H^T + R, with H = [[1,0,0,0],[0,1,0,0]]
-        val s00 = p[0] + r       // p00 + r
-        val s01 = p[1]           // p01
-        val s10 = p[4]           // p10
-        val s11 = p[5] + r       // p11 + r
+        val s00 = p[0] + r      // p00 + r
+        val s01 = p[1]          // p01
+        val s10 = p[4]          // p10
+        val s11 = p[5] + r      // p11 + r
 
         val detS = s00 * s11 - s01 * s10
         if (detS == 0.0) return
@@ -93,14 +89,14 @@ class KalmanTracker(val scaleFactor: Double) {
         val invS11 =  s00 / detS
 
         // K = P H^T S^-1  (4x2)
-        val k00 = p[0]  * invS00 + p[1]  * invS10  // Swift k11
-        val k01 = p[0]  * invS01 + p[1]  * invS11  // Swift k12
-        val k10 = p[4]  * invS00 + p[5]  * invS10  // Swift k21
-        val k11 = p[4]  * invS01 + p[5]  * invS11  // Swift k22
-        val k20 = p[8]  * invS00 + p[9]  * invS10  // Swift k31
-        val k21 = p[8]  * invS01 + p[9]  * invS11  // Swift k32
-        val k30 = p[12] * invS00 + p[13] * invS10  // Swift k41
-        val k31 = p[12] * invS01 + p[13] * invS11  // Swift k42
+        val k00 = p[0]  * invS00 + p[1]  * invS10
+        val k01 = p[0]  * invS01 + p[1]  * invS11
+        val k10 = p[4]  * invS00 + p[5]  * invS10
+        val k11 = p[4]  * invS01 + p[5]  * invS11
+        val k20 = p[8]  * invS00 + p[9]  * invS10
+        val k21 = p[8]  * invS01 + p[9]  * invS11
+        val k30 = p[12] * invS00 + p[13] * invS10
+        val k31 = p[12] * invS01 + p[13] * invS11
 
         // x = x + K y
         x[0] += k00 * y0 + k01 * y1
@@ -108,7 +104,7 @@ class KalmanTracker(val scaleFactor: Double) {
         x[2] += k20 * y0 + k21 * y1
         x[3] += k30 * y0 + k31 * y1
 
-        // (I - K H) P — match Swift: update rows 0 & 1 across all columns
+        // (I - K H) P
         val i_kh_11 = 1.0 - k00
         val i_kh_12 = -k01
         val i_kh_21 = -k10
@@ -126,7 +122,6 @@ class KalmanTracker(val scaleFactor: Double) {
 
         p[0] = p00n; p[1] = p01n; p[2] = p02n; p[3] = p03n
         p[4] = p10n; p[5] = p11n; p[6] = p12n; p[7] = p13n
-        // rows 2 and 3 remain unchanged (matches the Swift code path)
     }
 
     fun getCurrentState(): KalmanState {
