@@ -87,10 +87,10 @@ const SettingsMenu = ({ visible, onClose }) => {
     const insets = useSafeAreaInsets();
     const menuItems = [
         { name: 'Change Language', icon: 'language', action: () => Alert.alert('Change Language', 'This feature is coming soon!') },
-        { name: 'Contact Us', icon: 'person', action: () => Linking.openURL('https://example.com/contact') },
-        { name: 'FAQ', icon: 'help-outline', action: () => Linking.openURL('https://example.com/faq') },
-        { name: 'Terms of Service', icon: 'description', action: () => Linking.openURL('https://example.com/terms') },
-        { name: 'Privacy Policy', icon: 'shield', action: () => Linking.openURL('https://example.com/privacy') },
+        { name: 'Contact Us', icon: 'person', action: () => Linking.openURL('https://smashspeed.ca/#contact') },
+        { name: 'FAQ', icon: 'help-outline', action: () => Linking.openURL('https://smashspeed.ca/#faq') },
+        { name: 'Terms of Service', icon: 'description', action: () => Linking.openURL('https://smashspeed.ca/terms-of-service') },
+        { name: 'Privacy Policy', icon: 'shield', action: () => Linking.openURL('https://smashspeed.ca/privacy-policy') },
     ];
 
     const handlePress = (action) => {
@@ -241,7 +241,7 @@ const LoggedInView = ({ user }) => {
                 <Text style={styles.settingRowText}>Official Website</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
-            <TouchableOpacity style={styles.settingRow}>
+            <TouchableOpacity style={styles.settingRow} onPress={() => Linking.openURL('https://www.instagram.com/smashspeedai/')}>
                 <Icon name="camera-alt" size={22} color="#007AFF" />
                 <Text style={styles.settingRowText}>Follow on Instagram</Text>
             </TouchableOpacity>

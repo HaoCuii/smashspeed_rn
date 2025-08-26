@@ -336,17 +336,53 @@ export default function AnalyzeScreen({ route, navigation }: any) {
     return best.maxKph === -Infinity ? null : { ...best, angle };
   }, [speedsKph, centers]);
   
-  const finish = () => {
-    triggerHaptic('heavy');
-  
-    navigation.navigate('SpeedResult', {
-      maxKph: maxSpeed ? maxSpeed.maxKph : 0,
-      angle: maxSpeed ? maxSpeed.angle : 0,
-      videoUri: sourceUri,
-      startSec,
-      endSec,
-    });
-  };
+  // In AnalyzeScreen.tsx
+
+const finish = () => {
+  triggerHaptic('heavy');
+
+  // --- START: Added Code ---
+  // Construct the detailed frame data for upload
+  const frameDataForUpload = frames.map((frame, i) => {
+    const speedKPH = speedsKph[i];
+    // Skip any frames that don't have a valid speed calculated
+    if (speedKPH === null || !Number.isFinite(speedKPH)) {
+      return null;
+    }
+
+    let boundingBox = null;
+    const userBox = userBoxesByIndex[i]?.[0];
+
+    if (userBox) {
+      // Prioritize the user-edited box if it exists
+      boundingBox = userBox;
+    } else if (frame.boxes.length > 0 && vw > 0 && vh > 0) {
+      // Fall back to the first AI-detected box
+      boundingBox = mapModelToVideo(frame.boxes[0], vw, vh);
+    }
+
+    // Skip any frames where no bounding box could be found
+    if (!boundingBox) {
+      return null;
+    }
+
+    return {
+      timestamp: frame.t / 1000, // Convert from ms to seconds
+      speedKPH: speedKPH,
+      boundingBox: boundingBox,
+    };
+  }).filter(Boolean); // Remove any null entries from the array
+  // --- END: Added Code ---
+
+  navigation.navigate('SpeedResult', {
+    maxKph: maxSpeed ? maxSpeed.maxKph : 0,
+    angle: maxSpeed ? maxSpeed.angle : 0,
+    videoUri: sourceUri,
+    startSec,
+    endSec,
+    frameData: frameDataForUpload, // Pass the newly constructed data
+  });
+};
   
 
 

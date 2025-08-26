@@ -532,6 +532,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     height: 250,
+    marginBottom: 24,
   },
   videoPlayer: { 
     width: '100%', 
