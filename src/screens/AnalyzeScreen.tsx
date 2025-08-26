@@ -22,13 +22,6 @@ import Slider from '@react-native-community/slider';
 import HapticFeedback, { HapticFeedbackTypes } from 'react-native-haptic-feedback';
 import { HapticFeedbackTypes as HapticConstants } from 'react-native-haptic-feedback';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // MODIFICATION: Import icons
-import { BlurView } from 'expo-blur';
-
-const GlassPanel = ({ children, style }: { children: React.ReactNode; style?: any }) => (
-  <BlurView intensity={80} tint="light" style={style}>
-    {children}
-  </BlurView>
-);
 
 // --- Type Definitions ---
 type AnalyzeParams = {
@@ -346,40 +339,15 @@ export default function AnalyzeScreen({ route, navigation }: any) {
   const finish = () => {
     triggerHaptic('heavy');
   
-    // --- FIX START ---
-    // Prepare the detailed frame data to be saved, matching the Swift model.
-    const frameDataForFirestore = frames.map((frame, index) => {
-      const box = (userBoxesByIndex[index] || [])[0] || 
-                  (frame.boxes.length > 0 ? mapModelToVideo(frame.boxes[0], vw, vh) : null);
-      
-      const speed = speedsKph[index];
-
-      if (!box || speed == null || !isFinite(speed)) {
-        return null;
-      }
-
-      return {
-        timestamp: frame.t / 1000.0, // Convert ms to seconds
-        speedKPH: speed,
-        boundingBox: {
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-        }
-      };
-    }).filter((item): item is FrameData => item !== null); // Remove nulls and satisfy TypeScript
-    // --- FIX END ---
-  
     navigation.navigate('SpeedResult', {
       maxKph: maxSpeed ? maxSpeed.maxKph : 0,
       angle: maxSpeed ? maxSpeed.angle : 0,
       videoUri: sourceUri,
       startSec,
       endSec,
-      frameData: frameDataForFirestore, // Pass the new data
     });
   };
+  
 
 
   const clampBox = (b: VBox): VBox => {
@@ -654,7 +622,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
           )}
 
           <ScrollView contentContainerStyle={styles.controlsContainer}>
-            <GlassPanel style={styles.panel}>
+            <View style={styles.panel}>
               <Text style={styles.sectionHeader}>NAVIGATE FRAMES</Text>
               <View style={styles.speedReadout}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -684,10 +652,10 @@ export default function AnalyzeScreen({ route, navigation }: any) {
                 </View>
               </TouchableOpacity>
               {!showTuningControls && <Text style={styles.aiWarning}>Manual controls are hidden. AI detections are being used.</Text>}
-            </GlassPanel>
+            </View>
 
             {showTuningControls && (
-              <GlassPanel style={styles.panel}>
+              <View style={styles.panel}>
                 <View style={styles.manualHeader}>
                   <Text style={styles.sectionHeader}>MANUAL FINE-TUNING</Text>
                   <TouchableOpacity onPress={() => Alert.alert('Manual Adjustments', 'Add, remove, or edit bounding boxes. Hold adjustment buttons to accelerate changes.')}>
@@ -735,7 +703,7 @@ export default function AnalyzeScreen({ route, navigation }: any) {
                     )}
                   </>
                 )}
-              </GlassPanel>
+              </View>
             )}
           </ScrollView>
 
@@ -781,9 +749,14 @@ const styles = StyleSheet.create({
   // Controls ScrollView
   controlsContainer: { padding: 16, gap: 16, paddingBottom: 120 },
   panel: { 
+    backgroundColor: '#FFFFFF', 
     borderRadius: 16, 
-    overflow: 'hidden',
     padding: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   sectionHeader: { color: '#6D6D72', fontSize: 13, fontWeight: '600', marginBottom: 16 },
   // Navigation Panel
