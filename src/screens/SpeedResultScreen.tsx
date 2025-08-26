@@ -15,9 +15,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Share from 'react-native-share';
-import firestore from '@react-native-firebase/firestore';
-import storage from '@react-native-firebase/storage';
-import auth from '@react-native-firebase/auth';
+import { getFirestore, collection, addDoc, serverTimestamp } from '@react-native-firebase/firestore';
+import { getStorage, ref, putFile, getDownloadURL } from '@react-native-firebase/storage';
+import { getAuth } from '@react-native-firebase/auth';
 import { trim } from 'react-native-video-trim';
 import * as FileSystem from 'expo-file-system';
 import { BlurView } from 'expo-blur';
@@ -73,6 +73,11 @@ export default function SpeedResultScreen({ route, navigation }: any) {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'trimming' | 'saving' | 'saved' | 'not_logged_in' | 'error'>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  // Initialize Firebase services
+  const db = getFirestore();
+  const storage = getStorage();
+  const auth = getAuth();
+
   useEffect(() => {
     if (animOnce.current) return;
     animOnce.current = true;
@@ -96,7 +101,7 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
   useEffect(() => {
     const saveResult = async () => {
-      const user = auth().currentUser;
+      const user = auth.currentUser;
       if (!user) {
         setSaveStatus('not_logged_in');
         return;
@@ -122,23 +127,25 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
         const filename = `${timestamp}.mp4`;
         const remotePath = `videos/${uid}/${filename}`;
-        const ref = storage().ref(remotePath);
+        const storageRef = ref(storage, remotePath);
 
-        await ref.putFile(fileUri, { contentType: 'video/mp4' });
-        const videoURL = await ref.getDownloadURL();
+        await putFile(storageRef, fileUri, { contentType: 'video/mp4' });
+        const videoURL = await getDownloadURL(storageRef);
 
         await FileSystem.deleteAsync(fileUri, { idempotent: true });
 
         const detectionData = {
           angle: hasAngle ? Math.round(angle as number) : null,
-          date: firestore.FieldValue.serverTimestamp(),
+          date: serverTimestamp(),
           peakSpeedKph: Math.round(maxKph),
           videoURL,
           userId: uid,
           frameData: frameData || [],
         };
 
-        await firestore().collection('users').doc(uid).collection('detections').add(detectionData);
+        const detectionsRef = collection(db, 'users', uid, 'detections');
+        await addDoc(detectionsRef, detectionData);
+        
         setSaveStatus('saved');
         setUploadProgress(100);
       } catch (error) {
@@ -153,10 +160,10 @@ export default function SpeedResultScreen({ route, navigation }: any) {
 
     if (videoUri && startSec !== undefined && endSec !== undefined) {
       saveResult();
-    } else if (!auth().currentUser) {
+    } else if (!auth.currentUser) {
       setSaveStatus('not_logged_in');
     }
-  }, [maxKph, angle, hasAngle, videoUri, startSec, endSec, frameData]);
+  }, [maxKph, angle, hasAngle, videoUri, startSec, endSec, frameData, db, storage, auth]);
 
   const speedStr = useMemo(() => displaySpeed.toFixed(1), [displaySpeed]);
 
