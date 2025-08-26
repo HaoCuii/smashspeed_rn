@@ -7,7 +7,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
-import Modal from 'react-native-modal'; // Using react-native-modal for all popups
+import Modal from 'react-native-modal';
 import { BlurView } from 'expo-blur';
 
 import AppIcon from '../components/AppIcon';
@@ -19,7 +19,7 @@ type RootStackParamList = {
   Trim: { sourceUri: string; duration: number };
 };
 
-const GlassPanel = ({ children, style }) => (
+const GlassPanel = ({ children, style }: { children: React.ReactNode, style?: any }) => (
   <BlurView intensity={80} tint="light" style={style}>
     {children}
   </BlurView>
@@ -195,7 +195,6 @@ const DetectScreen = () => {
         onChoose={handleChooseFromLibrary}
       />
 
-      {/* TALL, DRAGGABLE "HOW TO RECORD" MODAL */}
       <Modal
         isVisible={showRecordingGuide}
         onSwipeComplete={() => setShowRecordingGuide(false)}
@@ -206,12 +205,11 @@ const DetectScreen = () => {
         <RecordingGuideModalContent onClose={() => setShowRecordingGuide(false)} />
       </Modal>
 
-      {/* ONBOARDING POPUP STYLED TO HAVE GAP AT TOP */}
       <Modal
         isVisible={showOnboarding}
         onSwipeComplete={() => setShowOnboarding(false)}
         swipeDirection={['down']}
-        style={styles.onboardingModal} // MODIFICATION: Applied new style
+        style={styles.onboardingModal}
       >
         <Onboarding onComplete={() => setShowOnboarding(false)} />
       </Modal>
@@ -236,22 +234,24 @@ const InputSourceSelectorModal = ({ visible, onClose, onRecord, onChoose }: Inpu
       swipeDirection={['down']}
       onBackdropPress={onClose}
       style={styles.bottomSheetModal}
+      backdropColor="transparent"
     >
         <GlassPanel style={styles.inputSelectorSheet}>
           <View style={styles.grabber} />
           <Text style={styles.inputSelectorTitle}>Analyze a Smash</Text>
+          
           <View style={styles.warningBox}>
-            <AppIcon name="exclamationmark.triangle" fallbackName="alert-triangle" size={16} color="#555" />
             <Text style={styles.warningText}>Only landscape videos are supported.</Text>
           </View>
+
           <View style={styles.inputSelectorCard}>
             <TouchableOpacity style={[styles.inputButton, styles.inputButtonProminent]} onPress={onRecord}>
               <AppIcon name="camera.fill" fallbackName="camera" size={20} color="#FFF" />
               <Text style={[styles.inputButtonText, styles.inputButtonTextProminent]}>Record New Video</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.inputButton, styles.inputButtonBordered]} onPress={onChoose}>
+            <TouchableOpacity style={[styles.inputButton, styles.inputButtonSecondary]} onPress={onChoose}>
               <AppIcon name="photo.on.rectangle.angled" fallbackName="image" size={20} color="#007AFF" />
-              <Text style={[styles.inputButtonText, styles.inputButtonTextBordered]}>Choose from Library</Text>
+              <Text style={[styles.inputButtonText, styles.inputButtonTextSecondary]}>Choose from Library</Text>
             </TouchableOpacity>
           </View>
         </GlassPanel>
@@ -334,12 +334,11 @@ const styles = StyleSheet.create({
   },
   tallSheetModal: {
     margin: 0,
-    paddingTop: '8%', // Creates space at the top, pushing content down
+    paddingTop: '8%',
   },
-  // MODIFICATION: New style for the onboarding modal
   onboardingModal: {
     margin: 0,
-    paddingTop: '8%', // Creates space at the top, pushing content down
+    paddingTop: '8%',
   },
   grabber: {
     width: 40,
@@ -358,17 +357,62 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     overflow: 'hidden',
+    alignItems: 'center',
   },
-  inputSelectorTitle: { fontSize: 18, fontWeight: '600', color: '#3C3C43', marginBottom: 10 },
-  warningBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(174,174,178,0.2)', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, marginBottom: 15 },
-  warningText: { marginLeft: 8, fontSize: 14, fontWeight: '500', color: '#3C3C43' },
-  inputSelectorCard: { width: '100%', padding: 20, borderRadius: 20, backgroundColor: '#FFFFFF' },
-  inputButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 16, borderRadius: 14 },
-  inputButtonProminent: { backgroundColor: '#007AFF', marginBottom: 12 },
-  inputButtonBordered: { backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(60,60,67,0.1)' },
-  inputButtonText: { fontSize: 17, fontWeight: '600', marginLeft: 10 },
-  inputButtonTextProminent: { color: '#FFF' },
-  inputButtonTextBordered: { color: '#007AFF' },
+  inputSelectorTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#000',
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  warningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(174,174,178,0.2)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  warningText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#3C3C43'
+  },
+  inputSelectorCard: {
+    width: '100%',
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF'
+  },
+  inputButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 14
+  },
+  inputButtonProminent: {
+    backgroundColor: '#007AFF',
+    marginBottom: 12
+  },
+  inputButtonSecondary: {
+    backgroundColor: '#F2F2F7',
+  },
+  inputButtonText: {
+    fontSize: 17,
+    fontWeight: '600',
+    marginLeft: 10
+  },
+  inputButtonTextProminent: {
+    color: '#FFF'
+  },
+  inputButtonTextSecondary: {
+    color: '#007AFF'
+  },
 
   // "How to Record" Modal Styles
   rgBg: {
